@@ -45,6 +45,29 @@ Nvfp4W4a4TmaDescriptors make_descriptors(const std::uint8_t* activation_codes,
     return descriptors;
 }
 
+#ifdef _WIN32
+class TmaDescriptorBlock {
+public:
+    explicit TmaDescriptorBlock(cudaStream_t stream) : stream_(stream) {
+        CUDA_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&device_),
+                                   sizeof(Nvfp4W4a4TmaDescriptors), stream_));
+    }
+
+    ~TmaDescriptorBlock() {
+        if (device_ != nullptr) { (void)cudaFreeAsync(device_, stream_); }
+    }
+
+    TmaDescriptorBlock(const TmaDescriptorBlock&)            = delete;
+    TmaDescriptorBlock& operator=(const TmaDescriptorBlock&) = delete;
+
+    Nvfp4W4a4TmaDescriptors* device() const noexcept { return device_; }
+
+private:
+    cudaStream_t stream_             = nullptr;
+    Nvfp4W4a4TmaDescriptors* device_ = nullptr;
+};
+#endif
+
 } // namespace
 
 void launch_nvfp4_linear_swiglu_w4a4_tma(const std::uint8_t* activation_codes,
@@ -61,8 +84,8 @@ void launch_nvfp4_linear_swiglu_w4a4_tma(const std::uint8_t* activation_codes,
     constexpr std::size_t kSharedBytes = sizeof(Nvfp4LinearSwiGluTmaSharedStorage<M256N128S3>);
     static const bool kConfigured      = [] {
         CUDA_CHECK(cudaFuncSetAttribute(nvfp4_linear_swiglu_w4a4_tma_kernel<Geometry, M256N128S3>,
-                                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                             static_cast<int>(kSharedBytes)));
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        static_cast<int>(kSharedBytes)));
         return true;
     }();
     (void)kConfigured;
@@ -71,8 +94,16 @@ void launch_nvfp4_linear_swiglu_w4a4_tma(const std::uint8_t* activation_codes,
         activation_codes, activation_scales, weight_codes, weight_scales, tokens);
     constexpr int kPairN = M256N128S3::kBlockN / 2;
     const dim3 grid((Geometry::kOutputRows / 2) / kPairN, tokens / M256N128S3::kBlockM);
+#ifdef _WIN32
+    TmaDescriptorBlock block(stream);
+    CUDA_CHECK(cudaMemcpyAsync(block.device(), &descriptors, sizeof(descriptors),
+                               cudaMemcpyHostToDevice, stream));
+    nvfp4_linear_swiglu_w4a4_tma_kernel<Geometry, M256N128S3>
+        <<<grid, M256N128S3::kThreads, kSharedBytes, stream>>>(block.device(), alpha, output);
+#else
     nvfp4_linear_swiglu_w4a4_tma_kernel<Geometry, M256N128S3>
         <<<grid, M256N128S3::kThreads, kSharedBytes, stream>>>(descriptors, alpha, output);
+#endif
     CUDA_CHECK(cudaGetLastError());
 }
 

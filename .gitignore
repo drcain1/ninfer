@@ -2,6 +2,8 @@
 build/
 build-*/
 cmake-build-*/
+vcpkg_installed/
+.vcpkg/
 *.o
 *.obj
 *.so

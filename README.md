@@ -22,10 +22,11 @@ tokenizer, chat template, and media frontend resources required by its registere
 
 ## Quick start
 
-NInfer requires 64-bit Linux, an NVIDIA GeForce RTX 5090, CUDA Toolkit 13.1 or newer, CMake 3.28 or
-newer, a C++20 host compiler, Ninja, `pkg-config`, FFmpeg development libraries
-(`libavformat >= 60`, `libavcodec >= 60`, `libavutil >= 58`, and `libswscale >= 7`), and
-`libcurl >= 7.85`. The build rejects CUDA architectures other than `sm_120a`.
+NInfer requires 64-bit Linux or Windows 11, an NVIDIA GeForce RTX 5090, CUDA Toolkit 13.1 or newer,
+CMake 3.28 or newer, and a C++20 host compiler. Linux additionally needs Ninja, `pkg-config`,
+FFmpeg development libraries (`libavformat >= 60`, `libavcodec >= 60`, `libavutil >= 58`, and
+`libswscale >= 7`), and `libcurl >= 7.85`. Windows uses Visual Studio 2022 or newer and the pinned vcpkg
+manifest. The build rejects CUDA architectures other than `sm_120a`.
 
 Build the two product binaries:
 
@@ -36,6 +37,8 @@ cd ninfer
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
+
+For a native Windows build, see [Building and running NInfer on Windows](docs/windows.md).
 
 Tests, benchmarks, and maintainer tools are excluded from the default build. There is no install
 target or packaged binary distribution; run NInfer from its source build tree.

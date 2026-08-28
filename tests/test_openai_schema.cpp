@@ -108,9 +108,9 @@ Json parse_sse(const std::string& event) {
 }
 
 int test_parse_string_content() {
-    int failures                = 0;
-    const Json body             = {{"model", "qwen3.6-27b"},
-                                   {"messages", Json::array({Json{{"role", "user"}, {"content", "hello"}}})}};
+    int failures    = 0;
+    const Json body = {{"model", "qwen3.6-27b"},
+                       {"messages", Json::array({Json{{"role", "user"}, {"content", "hello"}}})}};
     const GenerationRequest req = parse_chat_completion_request(body, default_limits());
     failures += check(req.model == "qwen3.6-27b", "model parsed");
     failures += check(req.messages.size() == 1, "one message parsed");
@@ -139,6 +139,28 @@ int test_preserve_thinking_options() {
                       "chat_template_kwargs preserve_thinking parsed");
     failures += check(translate(kwargs_request).options.preserve_thinking,
                       "resolved preserve_thinking reached PromptInput");
+
+    Json disable_thinking                    = base;
+    disable_thinking["chat_template_kwargs"] = Json{{"enable_thinking", false}};
+    const GenerationRequest disable_request =
+        parse_chat_completion_request(disable_thinking, default_limits());
+    failures += check(disable_request.enable_thinking == false,
+                      "chat_template_kwargs enable_thinking parsed");
+    failures += check(!translate(disable_request).options.enable_thinking,
+                      "nested enable_thinking did not reach PromptInput");
+
+    Json same_enable               = disable_thinking;
+    same_enable["enable_thinking"] = false;
+    failures +=
+        check(parse_chat_completion_request(same_enable, default_limits()).enable_thinking == false,
+              "matching enable_thinking values rejected");
+
+    Json conflicting_enable               = disable_thinking;
+    conflicting_enable["enable_thinking"] = true;
+    failures += check(throws_api([&] {
+                          (void)parse_chat_completion_request(conflicting_enable, default_limits());
+                      }),
+                      "conflicting enable_thinking values accepted");
 
     Json alias                 = base;
     alias["preserve_thinking"] = false;
@@ -175,6 +197,10 @@ int test_preserve_thinking_options() {
     failures +=
         check(throws_api([&] { (void)parse_chat_completion_request(bad_value, default_limits()); }),
               "non-boolean preserve_thinking accepted");
+    bad_value["chat_template_kwargs"] = Json{{"enable_thinking", "yes"}};
+    failures +=
+        check(throws_api([&] { (void)parse_chat_completion_request(bad_value, default_limits()); }),
+              "non-boolean enable_thinking accepted");
     Json unknown                    = base;
     unknown["chat_template_kwargs"] = Json{{"preserve_thinking", true}, {"foo", 1}};
     failures +=
@@ -543,13 +569,13 @@ int test_parse_stop_and_max_tokens() {
 }
 
 int test_parse_sampling_carried() {
-    int failures                = 0;
-    const Json body             = {{"model", "m"},
-                                   {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})},
-                                   {"temperature", 0.7},
-                                   {"top_p", 0.9},
-                                   {"seed", 123},
-                                   {"logit_bias", Json{{"5", -1.5}}}};
+    int failures    = 0;
+    const Json body = {{"model", "m"},
+                       {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})},
+                       {"temperature", 0.7},
+                       {"top_p", 0.9},
+                       {"seed", 123},
+                       {"logit_bias", Json{{"5", -1.5}}}};
     const GenerationRequest req = parse_chat_completion_request(body, default_limits());
     failures += check(req.sampling.temperature.has_value() && *req.sampling.temperature == 0.7,
                       "temperature carried");

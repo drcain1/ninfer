@@ -87,7 +87,8 @@ The endpoint supports:
 - `stream_options.include_usage`;
 - function tools, tool choices, assistant tool-call history, and tool-result messages;
 - the top-level `reasoning_effort` field;
-- the `enable_thinking` extension;
+- the top-level `enable_thinking` extension and Qwen-compatible
+  `chat_template_kwargs.enable_thinking` spelling;
 - `chat_template_kwargs.preserve_thinking` and the top-level `preserve_thinking` alias.
 
 The request `model` must equal the public model ID: the artifact `identity.model_id` by default, or
@@ -134,8 +135,9 @@ not promise that the model will emit nonempty content or a tool call after the m
 For Chat Completions, `reasoning_effort: "none"` disables thinking. `low`, `medium`, and `xhigh`
 select the corresponding template effort when available. The other OpenAI protocol values
 `minimal`, `high`, and `max` are parsed but rejected when the loaded template does not expose them.
-`enable_thinking` controls the same new-turn thinking switch; a contradictory combination with
-`reasoning_effort` returns `conflicting_template_option`.
+`enable_thinking` controls the same new-turn thinking switch. Chat Completions accepts it either at
+the top level or as `chat_template_kwargs.enable_thinking`; conflicting values, or a contradictory
+combination with `reasoning_effort`, return `conflicting_template_option`.
 
 `preserve_thinking` controls whether reasoning from closed assistant turns remains in later
 prompts. It defaults to the server setting, which is off unless `--preserve-thinking` is used. If

@@ -43,14 +43,14 @@ struct Nvfp4LinearSwiGluTmaSharedStorage {
 };
 
 template <class Geometry, class Schedule>
-__global__ __launch_bounds__(
-    Schedule::kThreads,
-    Schedule::
-        kMinBlocksPerSm) void nvfp4_linear_swiglu_w4a4_tma_kernel(const __grid_constant__
-                                                                      Nvfp4W4a4TmaDescriptors
-                                                                          descriptors,
-                                                                  float alpha,
-                                                                  __nv_bfloat16* __restrict__ output) {
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_linear_swiglu_w4a4_tma_kernel(
+#ifdef _WIN32
+    const Nvfp4W4a4TmaDescriptors* __restrict__ descriptors,
+#else
+    const __grid_constant__ Nvfp4W4a4TmaDescriptors descriptors,
+#endif
+    float alpha, __nv_bfloat16* __restrict__ output) {
     static_assert(Geometry::kOutputRows == 34816);
     static_assert(Geometry::kInputRows == 5120);
     static_assert((Geometry::kInputRows % Schedule::kBlockK) == 0);
@@ -85,6 +85,11 @@ __global__ __launch_bounds__(
             asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" : : : "memory");
         }
         if (threadIdx.x == 0) {
+#ifdef _WIN32
+            const Nvfp4W4a4TmaDescriptors* descriptor_block = descriptors;
+#else
+            const Nvfp4W4a4TmaDescriptors* descriptor_block = &descriptors;
+#endif
 #pragma unroll 1
             for (int k_tile = 0; k_tile < kKTiles; ++k_tile) {
                 const int stage                 = k_tile % Schedule::kStages;
@@ -98,17 +103,17 @@ __global__ __launch_bounds__(
                 nvfp4_mbarrier_arrive_expect_tx(&shared.full[stage], kTransactionBytes);
 
                 auto& tensors = shared.scratch.tensors;
-                nvfp4_tma_load_2d(tensors.a_codes[stage], &descriptors.a_codes,
+                nvfp4_tma_load_2d(tensors.a_codes[stage], &descriptor_block->a_codes,
                                   k_tile * Schedule::kCodeRowBytes, token_begin,
                                   &shared.full[stage]);
-                nvfp4_tma_load_2d(tensors.b_codes[stage], &descriptors.b_codes,
+                nvfp4_tma_load_2d(tensors.b_codes[stage], &descriptor_block->b_codes,
                                   k_tile * Schedule::kCodeRowBytes, pair_begin,
                                   &shared.full[stage]);
                 nvfp4_tma_load_2d(tensors.b_codes[stage] + kPairN * Schedule::kCodeRowBytes,
-                                  &descriptors.b_codes, k_tile * Schedule::kCodeRowBytes,
+                                  &descriptor_block->b_codes, k_tile * Schedule::kCodeRowBytes,
                                   pair_begin + kIntermediate, &shared.full[stage]);
-                nvfp4_tma_load_2d(tensors.a_scale4[stage], &descriptors.a_scales, (k_tile / 2) * 16,
-                                  token_begin, &shared.full[stage]);
+                nvfp4_tma_load_2d(tensors.a_scale4[stage], &descriptor_block->a_scales,
+                                  (k_tile / 2) * 16, token_begin, &shared.full[stage]);
 
                 const int gate_scale_row = ((pair_begin / 128) * Geometry::kScaleTilesPerRow +
                                             k_tile * Schedule::kK64PerStage) *
@@ -117,9 +122,9 @@ __global__ __launch_bounds__(
                     (((pair_begin + kIntermediate) / 128) * Geometry::kScaleTilesPerRow +
                      k_tile * Schedule::kK64PerStage) *
                     32;
-                nvfp4_tma_load_2d(tensors.b_scales[stage][0], &descriptors.b_scales, 0,
+                nvfp4_tma_load_2d(tensors.b_scales[stage][0], &descriptor_block->b_scales, 0,
                                   gate_scale_row, &shared.full[stage]);
-                nvfp4_tma_load_2d(tensors.b_scales[stage][1], &descriptors.b_scales, 0,
+                nvfp4_tma_load_2d(tensors.b_scales[stage][1], &descriptor_block->b_scales, 0,
                                   up_scale_row, &shared.full[stage]);
             }
         }
@@ -192,8 +197,8 @@ __global__ __launch_bounds__(
 
                 const int scale_pair_row = pair_mod128 + warp_n * (kPairN / Schedule::kWarpsN) +
                                            pair_fragment * 8 + sfb_row;
-                const int row_mod32    = scale_pair_row & 31;
-                const int row_quartile = scale_pair_row >> 5;
+                const int row_mod32      = scale_pair_row & 31;
+                const int row_quartile   = scale_pair_row >> 5;
                 b_scales[mma_n] =
                     load_vec<unsigned>(tensors.b_scales[stage][branch] +
                                        (local_k64 * 32 + row_mod32) * 16 + row_quartile * 4);

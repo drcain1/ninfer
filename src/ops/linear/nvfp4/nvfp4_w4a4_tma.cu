@@ -53,6 +53,29 @@ static_assert((kQueryRows % TmaM256N128::kBlockN) == 0);
 static_assert((kKeyRows % TmaM256N128::kBlockN) == 0);
 static_assert((kGateRows % TmaM256N128::kBlockN) == 0);
 
+#ifdef _WIN32
+class TmaDescriptorBlock {
+public:
+    explicit TmaDescriptorBlock(cudaStream_t stream) : stream_(stream) {
+        CUDA_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&device_),
+                                   sizeof(Nvfp4W4a4TmaDescriptors), stream_));
+    }
+
+    ~TmaDescriptorBlock() {
+        if (device_ != nullptr) { (void)cudaFreeAsync(device_, stream_); }
+    }
+
+    TmaDescriptorBlock(const TmaDescriptorBlock&)            = delete;
+    TmaDescriptorBlock& operator=(const TmaDescriptorBlock&) = delete;
+
+    Nvfp4W4a4TmaDescriptors* device() const noexcept { return device_; }
+
+private:
+    cudaStream_t stream_             = nullptr;
+    Nvfp4W4a4TmaDescriptors* device_ = nullptr;
+};
+#endif
+
 template <class Geometry, class Schedule, class Epilogue, class Output>
 void launch_tma(const std::uint8_t* activation_codes, const std::uint8_t* activation_scales,
                 const std::uint8_t* weight_codes, const std::uint8_t* weight_scales,
@@ -64,15 +87,23 @@ void launch_tma(const std::uint8_t* activation_codes, const std::uint8_t* activa
     constexpr std::size_t kSharedBytes = sizeof(Nvfp4W4a4TmaSharedStorage<Schedule>);
     static const bool kConfigured      = [] {
         CUDA_CHECK(cudaFuncSetAttribute(nvfp4_w4a4_tma_kernel<Geometry, Schedule, Epilogue, Output>,
-                                             cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                             static_cast<int>(kSharedBytes)));
+                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        static_cast<int>(kSharedBytes)));
         return true;
     }();
     (void)kConfigured;
 
     const dim3 grid(Geometry::kOutputRows / Schedule::kBlockN, tokens / Schedule::kBlockM);
+#ifdef _WIN32
+    TmaDescriptorBlock block(stream);
+    CUDA_CHECK(cudaMemcpyAsync(block.device(), &descriptors, sizeof(descriptors),
+                               cudaMemcpyHostToDevice, stream));
+    nvfp4_w4a4_tma_kernel<Geometry, Schedule><<<grid, Schedule::kThreads, kSharedBytes, stream>>>(
+        block.device(), alpha, epilogue, output);
+#else
     nvfp4_w4a4_tma_kernel<Geometry, Schedule>
         <<<grid, Schedule::kThreads, kSharedBytes, stream>>>(descriptors, alpha, epilogue, output);
+#endif
     CUDA_CHECK(cudaGetLastError());
 }
 

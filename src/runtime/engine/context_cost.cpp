@@ -12,7 +12,12 @@
 #include <system_error>
 #include <utility>
 
-#include <unistd.h>
+#ifdef _WIN32
+#    include <process.h>
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
 
 namespace ninfer::runtime {
 
@@ -23,7 +28,6 @@ const std::vector<ContextCostMachinePreset>& compiled_context_cost_defaults();
 namespace {
 
 using Json = nlohmann::json;
-using U128 = unsigned __int128;
 
 constexpr std::size_t direction_index(ContextTransferDirection direction) noexcept {
     return static_cast<std::size_t>(direction);
@@ -36,18 +40,25 @@ std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept {
 }
 
 std::uint64_t saturating_product(std::uint64_t left, std::uint64_t right) noexcept {
-    const U128 product = static_cast<U128>(left) * right;
-    return product > std::numeric_limits<std::uint64_t>::max()
-               ? std::numeric_limits<std::uint64_t>::max()
-               : static_cast<std::uint64_t>(product);
+    if (left != 0 && right > std::numeric_limits<std::uint64_t>::max() / left) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return left * right;
 }
 
 std::uint64_t q32_product_ns(std::uint64_t coefficient, std::uint64_t units) noexcept {
     if (coefficient == 0 || units == 0) { return 0; }
-    const U128 product        = static_cast<U128>(coefficient) * units;
-    const U128 maximum_scaled = static_cast<U128>(std::numeric_limits<std::uint64_t>::max()) << 32U;
-    if (product >= maximum_scaled) { return std::numeric_limits<std::uint64_t>::max(); }
-    return static_cast<std::uint64_t>((product + kContextCostQ32One - 1U) >> 32U);
+    // Exact ceil(coefficient * units / 2^32), decomposed into 32-bit limbs so this also
+    // compiles with MSVC, which has no unsigned __int128 type.
+    const std::uint64_t coefficient_high = coefficient >> 32U;
+    const std::uint64_t coefficient_low  = coefficient & 0xffffffffULL;
+    const std::uint64_t units_high       = units >> 32U;
+    const std::uint64_t units_low        = units & 0xffffffffULL;
+    const std::uint64_t low_product      = coefficient_low * units_low;
+    std::uint64_t low_quotient           = saturating_product(coefficient_low, units_high);
+    low_quotient                         = saturating_add(low_quotient, low_product >> 32U);
+    if ((low_product & 0xffffffffULL) != 0) { low_quotient = saturating_add(low_quotient, 1); }
+    return saturating_add(saturating_product(coefficient_high, units), low_quotient);
 }
 
 void require_object(const Json& value, std::string_view context) {
@@ -296,7 +307,12 @@ void write_document_atomic(const std::filesystem::path& path, const Json& docume
     if (!path.parent_path().empty()) { std::filesystem::create_directories(path.parent_path()); }
 
     std::filesystem::path temporary = path;
-    temporary += ".tmp." + std::to_string(static_cast<long long>(::getpid())) + "." +
+#ifdef _WIN32
+    const int process_id = ::_getpid();
+#else
+    const int process_id = ::getpid();
+#endif
+    temporary += ".tmp." + std::to_string(static_cast<long long>(process_id)) + "." +
                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     try {
         {
@@ -311,7 +327,15 @@ void write_document_atomic(const std::filesystem::path& path, const Json& docume
                                          temporary.string());
             }
         }
+#ifdef _WIN32
+        if (!::MoveFileExW(temporary.c_str(), path.c_str(),
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(),
+                                    "replace context-cost preset");
+        }
+#else
         std::filesystem::rename(temporary, path);
+#endif
     } catch (...) {
         std::error_code ignored;
         std::filesystem::remove(temporary, ignored);

@@ -362,8 +362,8 @@ void measure_contiguous_d2d(DeviceContext& device, const MeasurementOptions& opt
     for (std::size_t index = 0; index < cases.size(); ++index) {
         const ContiguousCase& test = cases[index];
         output.push_back(TransferMeasurement{
-            .label = "contiguous-d2d-b" + std::to_string(test.payload_bytes) + "-o" +
-                     std::to_string(test.copy_operations),
+            .label     = "contiguous-d2d-b" + std::to_string(test.payload_bytes) + "-o" +
+                         std::to_string(test.copy_operations),
             .direction = TransferDirection::DeviceToDevice,
             .work = {.payload_bytes = test.payload_bytes, .copy_operations = test.copy_operations},
             .page_count      = 0,
@@ -399,12 +399,14 @@ std::vector<TextCase> text_cases(std::uint32_t chunk) {
 }
 
 std::uint64_t attention_pairs(std::uint32_t prefix, std::uint32_t suffix) {
-    const unsigned __int128 pairs = static_cast<unsigned __int128>(prefix) * suffix +
-                                    static_cast<unsigned __int128>(suffix) * (suffix + 1ULL) / 2U;
-    if (pairs > std::numeric_limits<std::uint64_t>::max()) {
+    const std::uint64_t linear = static_cast<std::uint64_t>(prefix) * suffix;
+    const std::uint64_t triangular =
+        suffix % 2U == 0 ? static_cast<std::uint64_t>(suffix / 2U) * (suffix + 1ULL)
+                         : static_cast<std::uint64_t>(suffix) * ((suffix + 1ULL) / 2U);
+    if (triangular > std::numeric_limits<std::uint64_t>::max() - linear) {
         throw std::overflow_error("prefill attention-pair count exceeds uint64");
     }
-    return static_cast<std::uint64_t>(pairs);
+    return linear + triangular;
 }
 
 std::vector<std::uint8_t> block_ppm(int width, int height, std::uint8_t value) {
