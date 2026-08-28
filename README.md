@@ -40,6 +40,17 @@ cmake --build build -j
 
 For a native Windows build, see [Building and running NInfer on Windows](docs/windows.md).
 
+Example PowerShell launch for Qwen3.8 27B NVFP4 with MTP, a 196608-token context, and Vision:
+
+```powershell
+.\build-windows\apps\Release\ninfer-serve.exe `
+  .\build-windows\apps\Release\models\qwen3_8_27b_nvfp4.ninfer `
+  --host 0.0.0.0 --max-context 196608 --kv-capacity 196608 `
+  --max-concurrency 2 --kv-dtype fp8 --device-state-slots 2 `
+  --host-state-slots 8 --host-kv-mib 8192 --spec mtp --draft-tokens 3 `
+  --lm-head-draft --preserve-thinking --vision
+```
+
 Tests, benchmarks, and maintainer tools are excluded from the default build. There is no install
 target or packaged binary distribution; run NInfer from its source build tree.
 
