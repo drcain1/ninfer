@@ -49,8 +49,8 @@ cannot be combined with `--vision`. A later request cannot enable a capability o
 | Method and path | Behavior |
 |---|---|
 | `GET /health` | process health |
-| `GET /v1/models` | configured OpenAI model alias |
-| `GET /v1/models/{id}` | lookup of the configured alias |
+| `GET /v1/models` | configured OpenAI model alias and effective `max_model_len` |
+| `GET /v1/models/{id}` | lookup of the configured alias and effective `max_model_len` |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
 | `POST /v1/responses` | OpenAI Responses Core generation, state, typed Items, and SSE |
 | `POST /v1/responses/input_tokens` | Responses prompt-token count without generation |
@@ -59,6 +59,18 @@ cannot be combined with `--vision`. A later request cannot enable a capability o
 | `GET /v1/responses/{id}/input_items` | list that Response's normalized input Items |
 | `POST /v1/messages` | Anthropic-style message generation |
 | `POST /v1/messages/count_tokens` | checkpoint-native expanded input-token count |
+
+Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
+error responses. Anthropic endpoints use their separate `request-id` contract.
+
+All three generation SSE endpoints emit the standard `: keep-alive` comment after five seconds
+without a protocol event. The comment is transport-only: SSE clients ignore it, and it does not
+change generated text, event ordering, usage, stored Responses, or request logs. On Linux, accepted
+connections also use TCP keepalive and a 15-second `TCP_USER_TIMEOUT`; together with the heartbeat,
+a dead or unacknowledging peer is normally cancelled within about 20 seconds, including while the
+request is waiting or prefilling. A peer whose TCP stack remains connected and acknowledges data
+cannot be distinguished from a reading application; proxies must close their upstream NInfer
+connection when the downstream client disappears.
 
 ## OpenAI Chat Completions
 
@@ -77,19 +89,59 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 The endpoint supports:
 
-- `system`, `developer`, `user`, `assistant`, and `tool` history;
-- string content and ordered text, `image_url`, and `video_url` parts; tool messages accept text
-  parts only;
-- `max_completion_tokens` and the legacy `max_tokens` spelling;
-- `temperature`, `top_p`, `top_k`, presence/frequency penalties, and a nonnegative `seed`;
-- one stop string or an array of stop strings;
+- `system`, `developer`, `user`, `assistant`, and `tool` history, plus legacy `function` history;
+- string content and ordered text/refusal parts; adjacent parts are preserved without inserted
+  separators, and empty wire content remains an empty turn;
+- User `image_url` parts, tool-result `image_url` parts used by compatible clients, and the User
+  `video_url` extension using HTTP(S) or data URIs; image detail is omitted or `auto`;
+- nonnegative `max_completion_tokens` and the legacy `max_tokens` spelling; zero performs prompt
+  processing without generation;
+- `temperature`, `top_p`, presence/frequency penalties, and signed integer `seed`;
+- the compatible `top_k` (`0..20`) and `min_p` (`0..1`) sampler extensions;
+- up to four non-empty stop strings, applied to both reasoning and answer output;
+- `n:1`, text-only `modalities`, and `response_format: {"type":"text"}`;
 - non-streaming responses and server-sent event streams;
 - `stream_options.include_usage`;
-- function tools, tool choices, assistant tool-call history, and tool-result messages;
+- non-strict function tools with `tool_choice` `auto`, `none`, or `allowed_tools` in `auto` mode,
+  parallel calls enabled, assistant tool-call history, tool-result messages, and legacy
+  function-call history;
 - the top-level `reasoning_effort` field;
-- the top-level `enable_thinking` extension and Qwen-compatible
-  `chat_template_kwargs.enable_thinking` spelling;
-- `chat_template_kwargs.preserve_thinking` and the top-level `preserve_thinking` alias.
+- `enable_thinking` and `preserve_thinking`, either at top level or in
+  `chat_template_kwargs`;
+- Assistant `reasoning_content` and `reasoning` history aliases.
+
+Options whose observable behavior the Engine cannot provide are rejected when they request that
+behavior. This includes JSON constrained output, nonzero `logit_bias`, requested log probabilities,
+audio/file input or audio output, `strict:true`, required or named tool choice,
+`parallel_tool_calls:false` with enabled tools, explicit low/high image detail, web search,
+moderation, low/high verbosity, stored Chat Completions, and non-empty legacy `functions`.
+Each capability rejection identifies the affected field and the guarantee NInfer cannot provide.
+Known constrained-decoding aliases (`grammar`, `structured_outputs`, `guided_json`, `guided_regex`,
+`guided_choice`, and `guided_grammar`) receive the same explicit rejection instead of being treated
+as unknown hints.
+
+Semantically neutral fields do not make an otherwise executable request fail. All-zero
+`logit_bias`, `logprobs:false`, `top_logprobs:0`, `verbosity:"medium"`, empty legacy tool controls,
+text-only `audio` configuration, and `prediction` are accepted without changing Engine execution.
+Metadata, user/safety identifiers, service-tier and prompt-cache hints are likewise advisory.
+Unknown top-level fields are ignored.
+
+A string `name` on a `tool` message is accepted as an ignored, output-neutral compatibility
+extension for clients that mirror the function name onto tool results. It does not participate in
+tool identity, prompt rendering, or output. Non-string values are malformed; non-empty names on
+other message roles remain unsupported because they carry participant identity that the loaded chat
+template cannot represent.
+
+For commonly generated OpenAI-compatible payloads, `repetition_penalty` is accepted only at its
+neutral value `1`, and `mm_processor_kwargs` when empty or containing only null values. String-form
+image/video URLs are also accepted. Other non-null `chat_template_kwargs` are rejected rather than
+silently changing prompt semantics.
+
+Malformed protocol values return field-specific HTTP 400 errors. Invalid media sources, bytes, or
+decoded content use `invalid_media`; remote fetch and timeout failures retain their dedicated
+server-error codes. Failures in the normalized prompt contract use `invalid_prompt`; typed capacity
+and availability failures retain their dedicated codes. Internal invariant failures are not
+relabeled as client input errors.
 
 The request `model` must equal the public model ID: the artifact `identity.model_id` by default, or
 the explicit `--model-id` override. Reasoning is returned separately as `reasoning_content`; answer
@@ -116,8 +168,9 @@ not exposed by the loaded template returns HTTP 400 with code
 prompt semantics enable thinking. It does not add or reinterpret an HTTP request field: the
 existing `reasoning_effort` and `enable_thinking` inputs still decide whether thinking is enabled,
 and a request resolved to non-thinking receives no cap. `--no-thinking` may coexist with this
-option because a protocol request can explicitly enable thinking. In this phase, Anthropic's
-existing `thinking.budget_tokens` member does not override the process default.
+option because a protocol request can explicitly enable thinking. Anthropic
+`thinking:{"type":"enabled","budget_tokens":N}` supplies a request-specific budget instead of
+this process default.
 
 Add `--default-thinking-budget 512` to the startup command to cap model-origin thinking at 512
 tokens for every thinking-enabled request.
@@ -135,9 +188,8 @@ not promise that the model will emit nonempty content or a tool call after the m
 For Chat Completions, `reasoning_effort: "none"` disables thinking. `low`, `medium`, and `xhigh`
 select the corresponding template effort when available. The other OpenAI protocol values
 `minimal`, `high`, and `max` are parsed but rejected when the loaded template does not expose them.
-`enable_thinking` controls the same new-turn thinking switch. Chat Completions accepts it either at
-the top level or as `chat_template_kwargs.enable_thinking`; conflicting values, or a contradictory
-combination with `reasoning_effort`, return `conflicting_template_option`.
+`enable_thinking` controls the same new-turn thinking switch; a contradictory combination with
+`reasoning_effort` returns `conflicting_template_option`.
 
 `preserve_thinking` controls whether reasoning from closed assistant turns remains in later
 prompts. It defaults to the server setting, which is off unless `--preserve-thinking` is used. If
@@ -146,7 +198,10 @@ both OpenAI spellings are present they must carry the same boolean value. Unknow
 
 Streaming begins with an assistant-role chunk, sends separate reasoning and content deltas, then a
 finish-reason chunk and `[DONE]`. When `stream_options.include_usage` is true, a final empty
-`choices` chunk contains completed usage.
+`choices` chunk contains completed usage. Aggregate and streamed usage include cached prompt tokens
+and reasoning-token details; choices carry `logprobs: null` when log probabilities were not
+requested, and aggregate assistant messages carry `refusal: null` because refusal output is not
+supported.
 
 ### Multimodal request
 
@@ -190,6 +245,28 @@ the prepared token count and configured context ceiling. A media preprocessing r
 returns HTTP 400 `media_budget_exceeded`. HTTP 413 `request_too_large` is reserved for a raw request
 body that exceeds `--max-request-mib` before JSON parsing; it is not used for model-context or media
 resource errors.
+
+## OpenAI prompt caching
+
+Chat Completions and Responses translate OpenAI cache hints into optional shared-prefix write
+candidates:
+
+- omitted `prompt_cache_options` creates a default implicit candidate at the latest representable
+  content boundary;
+- `mode:"implicit"` requests the same automatic candidate explicitly;
+- `mode:"explicit"` disables that implicit write for the request;
+- `prompt_cache_breakpoint:{"mode":"explicit"}` on supported content creates an explicit
+  candidate.
+
+One request carries at most four distinct writes. An implicit target occupies one slot unless it
+coincides with an explicit target; the remaining slots contain the latest explicit boundaries.
+Earlier schema-valid historical breakpoints are accepted but are not new write candidates. Exact
+reads of already-published prefixes do not require the request to repeat a marker.
+
+These fields are optimization hints. A legal boundary that cannot be represented as an exact
+rendered-token frontier is ignored without changing prompt content. `prompt_cache_key` is not an
+Engine session key or prefix identity. Valid TTL/retention values are accepted, but NInfer does not
+promise their wall-clock residency; physical retention follows the resource scheduler.
 
 ## OpenAI Responses Core
 
@@ -236,28 +313,31 @@ wire response contains typed `output` Items.
 | Field | NInfer Responses Core contract |
 |---|---|
 | `model` | required non-empty string; must equal the artifact-derived public model ID or explicit `--model-id` override |
-| `input` | required string or non-empty typed Item array |
+| `input` | string or typed Item array; it may be omitted or empty only when `previous_response_id` already supplies a user query |
 | `instructions` | optional string, inserted before the reconstructed conversation for this request only |
 | `previous_response_id` | optional ID of a retained local Response |
-| `max_output_tokens` | integer at least `16`; default is `--default-max-tokens` |
+| `max_output_tokens` | non-negative integer; omission executes with `--default-max-tokens` but remains `null` in the Response object |
 | `stream` | boolean; `true` selects Responses SSE rather than a JSON body |
 | `store` | boolean, default `true`; controls local retrieval and continuation state |
 | `temperature` | finite number in `[0,2]` |
 | `top_p` | finite number in `[0,1]` |
 | `metadata` | at most 16 string pairs; keys at most 64 characters and values at most 512 |
+| `client_metadata` | Codex client extension; an object or `null`, accepted as opaque tracing metadata with no generation effect |
 | `reasoning.effort` | `none` disables thinking; `low`, `medium`, or `xhigh` selects an effort exposed by the loaded chat template; `minimal`, `high`, and `max` return `reasoning_effort_not_supported` for the registered templates |
 | `chat_template_kwargs.preserve_thinking` | optional boolean controlling whether closed-turn reasoning remains in reconstructed prompts |
 | `preserve_thinking` | top-level alias for the same option; conflicting values are rejected |
 | `text.format` | omitted or `{"type":"text"}` only |
-| `tools` | flat Responses function definitions; see below |
-| `tool_choice` | `auto` or `none` |
-| `parallel_tool_calls` | omitted or `true` |
+| `tools` | direct function definitions or namespace groups containing function definitions; see below |
+| `tool_choice` | `auto`, `none`, or function-only `allowed_tools` with mode `auto`; a namespaced selection carries both `namespace` and `name` |
+| `parallel_tool_calls` | `true` by default; `false` is accepted only when no effective tool is callable |
+| `max_tool_calls` | non-negative integer accepted as a hosted-tool no-op; NInfer does not execute hosted tools |
 | `truncation` | omitted or `disabled`; overlong input fails instead of silently dropping Items |
 | `top_logprobs` | omitted or `0` |
 | `service_tier` | omitted, `auto`, or `default`; the response reports `default` |
 | `background` | omitted or `false` |
 | `include` | omitted or an empty array |
-| `stream_options` | omitted or `{"include_obfuscation":false}` |
+| `stream_options.include_obfuscation` | optional boolean; accepted as a transport hint, but this local server emits no padding |
+| cache and client hints | `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, and explicit breakpoints follow [OpenAI prompt caching](#openai-prompt-caching); `safety_identifier` and `user` are accepted as client hints |
 
 Unknown top-level fields fail with `unknown_parameter`. Recognized but unsupported features fail
 with a field-specific 400 error instead of being silently ignored.
@@ -271,28 +351,42 @@ String `input` is normalized to one user `message` with an `input_text` part. Ar
 | `message` | roles `user`, `assistant`, `system`, and `developer`; string content or typed content array |
 | `input_text` | message content part containing string `text` |
 | `output_text` | assistant-message replay part containing string `text` |
-| `input_image` | user-message part with HTTP(S) or data-URI `image_url`; detail omitted or `auto`; requires server `--vision` |
+| `refusal` | assistant-message replay part; its text enters assistant history |
+| `input_image` | user- or assistant-message part with HTTP(S) or data-URI `image_url`; detail omitted or `auto`; requires server `--vision` |
 | `input_video` | NInfer extension with HTTP(S) or data-URI `video_url`; requires server `--vision` |
-| `reasoning` | raw replay Item with an empty `summary` and `reasoning_text` content parts |
-| `function_call` | completed assistant call with optional `id`, and required `call_id`, `name`, and JSON-object string `arguments` |
-| `function_call_output` | completed tool result with required `call_id` and string `output` |
+| `reasoning` | raw replay Item with `reasoning_text` content; summary/encrypted metadata may accompany raw text but cannot replace it |
+| `function_call` | completed assistant call with optional `id` and namespace, plus required `call_id`, `name`, and JSON-object string `arguments` |
+| `function_call_output` | completed result with required `call_id` and optional matching name/namespace assertion; `output` may be a string or a non-empty array of `input_text`/`input_image` parts |
 
-Adjacent function-call Items are grouped into one assistant history turn. A reasoning Item attaches
-to the following assistant message or function call. Input Item IDs are preserved when supplied and
-generated otherwise; duplicate IDs fail.
+Contiguous assistant-owned Items form one assistant history turn in the representable order
+`reasoning` -> assistant message content -> `function_call`. Multiple message Items append their
+content parts, multiple calls retain declaration order, and a reasoning-only turn is retained. A
+user, system, developer, or `function_call_output` Item ends the group; an order that would require
+rearranging assistant content fails with `invalid_assistant_history`. Results are validated by
+`call_id` and reordered to call declaration order before prompt rendering; unknown, duplicate, or
+unrepresentable partial result sets fail with `invalid_tool_history`. Canonical input Items retain
+client order. Input Item IDs are preserved when supplied and generated otherwise; duplicate IDs
+fail.
 
 System and developer message Items retain their positions in the input array. Top-level
 `instructions` is represented as a leading developer turn for the current request; target-specific
 role lowering occurs only in the Qwen family frontend.
 
-`input_file`, `input_audio`, image `file_id`, non-`auto` image detail, reasoning summaries or
-encrypted reasoning, message `phase`, and other Item/content types are not supported. HTTP media
-URLs stored in a response chain are fetched again when that chain is continued; use data URIs when
-the historical media bytes must be immutable.
+An `input_text`, `input_image`, or tool-result part may carry
+`prompt_cache_breakpoint:{"mode":"explicit"}`. Write selection follows
+[OpenAI prompt caching](#openai-prompt-caching); boundaries affect reuse opportunities, not prompt
+identity or output semantics. String message status/phase metadata is accepted but has no Qwen
+prompt representation.
+
+`input_file`, `input_audio`, image `file_id`, non-`auto` image detail, reasoning metadata without raw
+reasoning text, partial tool Items, and other Item/content types are not supported. HTTP media URLs
+stored in a response chain are fetched again when that chain is continued; use data URIs when the
+historical media bytes must be immutable.
 
 ### Function tools
 
-Responses function definitions are flat rather than Chat Completions' nested `function` object:
+Responses function definitions may be declared directly rather than inside Chat Completions'
+nested `function` object:
 
 ```json
 {
@@ -308,12 +402,34 @@ Responses function definitions are flat rather than Chat Completions' nested `fu
 }
 ```
 
+They may also be grouped in a Responses namespace:
+
+```json
+{
+  "type": "namespace",
+  "name": "mcp__weather",
+  "description": "Weather service",
+  "tools": [{"type": "function", "name": "get_current"}]
+}
+```
+
+NInfer gives each namespace/function pair a distinct internal Engine identity and restores the
+separate `namespace` and `name` fields in aggregate output, SSE events, and replayed Items. The same
+function name may therefore appear in different namespaces. Namespace members remain ordinary
+client-executed functions; this does not add a remote MCP executor.
+
 NInfer renders these definitions in the Qwen prompt and parses model output into separate
 `function_call` output Items. Each output has a protocol Item `id` (`fc_...`) and a distinct
 `call_id` (`call_...`). The client executes the function and sends a `function_call_output` Item in
-a later request. NInfer does not execute functions or enforce JSON Schema through constrained
-decoding, so `strict:true`, `tool_choice:required`, named tool choice, hosted tools, MCP tools, and
-custom free-form tools are rejected.
+a later request. Only functions in the current effective tool set can become structured calls;
+undeclared model output remains ordinary text. `allowed_tools` with mode `auto` filters that set
+without changing declaration order, while `tool_choice:"none"` disables structured tool output even
+when the history contains earlier calls.
+
+NInfer does not execute functions or enforce JSON Schema through constrained decoding, so
+`strict:true`, required or named tool choice, hosted tools, remote MCP tools, and custom free-form
+tools are rejected. Deferred loading, output schemas, and caller restrictions that exclude direct
+invocation are also rejected because their semantics cannot be honored.
 
 ### Response object and usage
 
@@ -327,7 +443,8 @@ A terminal wire response has `object: "response"`, one of `completed`, `incomple
 Ordinary model/string stops produce `completed`. Output-token or context-capacity exhaustion
 produces `incomplete` with `incomplete_details.reason: "max_output_tokens"`. Errors accepted after
 an SSE response has started produce `response.failed`; validation and preparation errors remain
-normal HTTP error responses.
+normal HTTP error responses. `completed_at` is populated only for completed Responses. A
+reasoning-only incomplete result contains no invented empty assistant message.
 
 Usage is checkpoint-native:
 
@@ -400,9 +517,9 @@ Resource behavior:
 
 | Endpoint | Contract |
 |---|---|
-| `GET /v1/responses/{id}` | returns the stored terminal object, or 404 `response_not_found` |
+| `GET /v1/responses/{id}` | returns the stored terminal object, or 404 `response_not_found`; stream recovery and non-empty `include` are rejected rather than ignored |
 | `DELETE /v1/responses/{id}` | removes public retrieval and returns `response.deleted`; descendant contexts already retained by other Responses remain usable |
-| `GET /v1/responses/{id}/input_items` | returns normalized Items supplied to that request; supports `after`, `limit` `1..100` (default `20`), and `order` `asc|desc` (default `desc`) |
+| `GET /v1/responses/{id}/input_items` | returns normalized Items supplied to that request; supports `after`, `limit` `1..100` (default `20`), and `order` `asc|desc` (default `desc`); image URLs are redacted unless `include=message.input_image.image_url` |
 | `POST /v1/responses/{id}/cancel` | explicitly fails because background execution is unsupported |
 | `POST /v1/responses/compact` | explicitly fails with `compaction_not_supported` |
 
@@ -413,8 +530,11 @@ stored.
 
 ### Responses input token count
 
-`POST /v1/responses/input_tokens` accepts exactly `model` and `input`, performs the same typed Item,
-template, and media expansion, and does not run generation:
+`POST /v1/responses/input_tokens` uses the same prompt path as Create and does not run generation.
+It accepts `model`, `input`, `instructions`, `previous_response_id`, reasoning, function tools and
+tool choice, supported text/truncation values, and the `preserve_thinking` extension. Parent lookup,
+call-ID normalization, template rendering, and media expansion are therefore identical to the
+corresponding Create request:
 
 ```bash
 curl http://127.0.0.1:8080/v1/responses/input_tokens \
@@ -427,9 +547,9 @@ curl http://127.0.0.1:8080/v1/responses/input_tokens \
 ```
 
 Unsupported Create fields include Conversations, prompt templates, context management, hosted
-moderation, prompt-cache controls, safety/user identifiers, Structured Outputs/JSON mode,
-non-empty `include`, background execution, compaction, files/audio, and OpenAI-hosted/MCP/custom
-tools. These are compatibility boundaries, not silently accepted placeholders.
+moderation, Structured Outputs/JSON mode, non-empty `include`, background execution, compaction,
+files/audio, and OpenAI-hosted/MCP/custom tools. These are compatibility boundaries, not silently
+accepted placeholders.
 
 ## Anthropic Messages
 
@@ -445,36 +565,70 @@ curl http://127.0.0.1:8080/v1/messages \
   }'
 ```
 
-The endpoint supports top-level system text, ordered mid-conversation system messages,
-user/assistant history, text and image blocks, thinking blocks, tool-use history, tool results,
-client-defined tools, non-streaming responses, and Anthropic SSE events.
-Mid-conversation system messages remain at their `messages` array position and are not merged into
-the top-level system instruction. A system section must follow a user/tool-result message and be
-final or immediately precede an assistant message; it cannot interrupt a tool-use/tool-result pair.
-Consecutive system messages remain separate ordered turns.
+The endpoint accepts top-level System text, ordered User/Assistant/System history, text and image
+blocks, Thinking history, tool-use history, tool results, user-defined tools, aggregate responses,
+and Anthropic SSE. Consecutive User or Assistant messages are joined without adding separators.
+Mid-conversation System messages retain their input position. A final text-only Assistant message
+is an Assistant prefill: generation continues its existing text instead of opening another turn.
+Assistant prefill cannot contain media, Thinking, or tool calls and cannot start with Thinking
+enabled.
 
-Anthropic ephemeral `cache_control` on top-level system text blocks and client tool definitions
-marks a shared stable-prefix boundary. Because the Qwen prompt renders tools before the leading
-system instruction, NInfer retains the last marked tool boundary unless a later marked system
-boundary exists; when several system blocks are marked, it retains the last one. The boundary is a
-retention hint rather than a forced hit: reuse still requires exact rendered-token compatibility.
-Ephemeral `cache_control` on the final content block of a user or assistant message marks the
-normalized message boundary as a private long anchor; a non-final message-block breakpoint is
-rejected because it cannot be represented as an exact Qwen message frontier.
+`max_tokens` is optional for local clients and otherwise uses `--default-max-tokens`; a positive
+value is the complete output budget. `max_tokens:0` is rejected because NInfer does not expose a
+completed zero-output cache-prewarm lifecycle. `temperature`, `top_p`, `top_k`, and
+`stop_sequences` enter Engine execution. A matched custom stop is returned as
+`stop_reason:"stop_sequence"` together with the actual `stop_sequence`; context exhaustion returns
+`model_context_window_exceeded`.
 
-`thinking.type: "disabled"` disables thinking; other supported values enable it.
-The independent top-level `preserve_thinking` boolean controls closed-turn history and otherwise
-uses the server default.
+Thinking supports `disabled`, `adaptive`, and `enabled`. Enabled Thinking requires
+`budget_tokens >= 1024` and less than `max_tokens`, and that budget is passed to Engine. Visible
+Thinking is returned with an opaque local signature; SSE emits its `signature_delta` before
+closing the block. Assistant Thinking blocks must be passed back unmodified with that signature;
+signatures belong to the current serve process and are invalid after it restarts.
+`display:"omitted"` is rejected because NInfer cannot provide Anthropic's
+encrypted hidden-reasoning restore semantics. `preserve_thinking` remains a NInfer extension for
+closed-turn Qwen reasoning history. `output_config.effort` is checked against the loaded template's
+declared effort capability.
 
-Anthropic `output_config.effort` accepts the protocol values `low`, `medium`, `high`, `xhigh`, and
-`max`. The value is then checked against the loaded chat template in the same way as the OpenAI
-endpoints; the registered effort-capable template exposes `low`, `medium`, and `xhigh`. Combining
-an effort with `thinking.type: "disabled"` is rejected as contradictory.
+User-defined, non-strict tools support `name`, `description`, object `input_schema`, and
+`input_examples`. `tool_choice:auto` and `none` are executable. Forced or named choice,
+`strict:true`, active single-call enforcement, deferred tools, tools that exclude direct model
+calls, Anthropic-provided/server tools, toolsets, MCP, and containers are rejected because their
+required constraint or executor is absent. `tool_result` preserves text/image order and marks
+`is_error:true` explicitly in the model prompt. For a visible Assistant tool-use turn, the next
+User turn must provide exactly one leading result for every declared ID; valid results are matched
+by ID and normalized to call order. A history that begins with results remains valid as a truncated
+or imported conversation.
 
-Anthropic's `model` field is treated as a response label and does not select the loaded artifact.
+Block-level ephemeral `cache_control` on tools and supported System/User/Assistant/tool-history
+blocks creates explicit shared-prefix candidates. At most four distinct block-level breakpoints are
+accepted. Request-level `cache_control` targets the last cacheable block: it merges with an explicit
+breakpoint at the same target and TTL, conflicts at the same target with a different TTL, and needs
+an available fifth slot when four different explicit targets already exist. TTL must be `5m` or
+`1h`; it is a protocol hint, not a wall-clock residency guarantee.
+
+NInfer maps representable boundaries to exact prompt frontiers and ignores a legal but
+unrepresentable advisory boundary without changing the prompt. Reuse still requires exact rendered
+identity and can read an existing owner without another `cache_control`. Aggregate usage reports
+verified reused tokens in `cache_read_input_tokens` and leaves cache creation unknown. Streaming
+emits `message_start` after Engine admission commits the prefix selection and before
+transfer/prefill output, so its uncached/cache-read split is already exact; terminal cumulative
+usage matches the aggregate response.
+
+Documents, Search Results, Files, Structured Outputs, server-tool results, container uploads, and
+other execution-dependent blocks are rejected with the missing capability identified. Metadata,
+service tier, inference geography, protocol-version/beta headers, cache TTL, and unknown advisory
+fields do not block an otherwise executable request. The request `model` is any non-empty local
+proxy label and is echoed in the response; it does not select the resident artifact.
+
+Every Messages response carries a `request-id` header; error bodies also carry `request_id` and use
+Anthropic error categories. Local admission overload maps to HTTP 529 and queue/media timeouts to
+HTTP 504. Streaming owns the full Anthropic block lifecycle for Thinking, text, and tool use.
 
 `POST /v1/messages/count_tokens` uses the artifact's tokenizer, chat template, and media expansion
-without running GPU generation:
+without generation. It shares the same prompt normalization, tools, Thinking mode, Assistant
+prefill, media processing, and cache-marker interpretation as Messages; output-only sampling and
+streaming fields do not affect the count:
 
 ```bash
 curl http://127.0.0.1:8080/v1/messages/count_tokens \
@@ -538,13 +692,12 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--max-private-continuations N` | private continuation descriptor capacity | `2 * max-concurrency` |
 | `--max-shared-prefixes N` | shared stable-prefix descriptor capacity | `max-concurrency` |
 | `--max-long-anchors-per-continuation N` | private long-anchor limit per continuation | `2` |
-| `--max-cache-markers-per-request N` | caller marker input-complexity bound | `4` |
 | `--no-thinking` | disable thinking by default | thinking on |
 | `--preserve-thinking` | preserve closed-turn assistant reasoning by default | off |
 | `--cors` | permissive browser CORS headers | off |
 | `--temperature F` | process-level temperature override | unset |
 | `--top-p F` | process-level top-p override | unset |
-| `--top-k N` | process-level top-k override | unset |
+| `--top-k N` | process-level top-k override (`0..20`; zero selects the top-20 cap) | unset |
 | `--min-p F` | process-level min-p override | unset |
 | `--presence-penalty F` | process-level presence-penalty override | unset |
 | `--frequency-penalty F` | process-level frequency-penalty override | unset |
@@ -553,7 +706,8 @@ The table lists executable defaults. The startup example selects a long-context 
 
 Context-cost coefficients resolve once at startup from generic defaults, matching compiled values,
 and optional transfer or artifact-prefill entries from `--context-cost-presets FILE`. A malformed
-file aborts startup; the startup console line and JSONL record identify the selected source.
+file aborts startup; the operational context-cost record and JSONL `server_start` identify the
+selected source.
 
 Engine selects sampling defaults from the loaded model and the request's resolved thinking mode.
 Qwen3.6-27B and Qwen3.8-27B use `1.0/0.95/20/0/0` for
@@ -571,6 +725,19 @@ zero-valued flags.
 
 Run `./build/apps/ninfer-serve --help` for the exact option contract.
 
+Serve writes operational records to stderr using
+`[YYYY-MM-DD HH:MM:SS.mmm] [level] [ninfer-serve] message`. Startup records expose CUDA setup,
+including Engine startup, artifact inspection, target planning/finalization, weight materialization,
+pinned staging, frontend/Program construction, Host State and Host KV pinning, CUDA Graph
+preparation, Engine finalization, Serve warmup, and readiness. Interactive terminals show one
+transient weight-materialization progress line. Redirected stderr contains only persistent
+structured phase records, including rate-limited progress for long loads. Nested startup phase
+durations explain their inclusive parent and must not be summed. Normal lifecycle and client
+rejections are `info`; overload, timeout, and upstream failures are `warning`; internal operation
+failures are `error`; a process-level unrecoverable failure is `critical`. Operational request
+records contain stable classifications and counts, never prompts, generated text, request bodies,
+credentials, or arbitrary client error messages.
+
 ## Structured request log
 
 `--request-log-jsonl FILE` enables the machine-readable measurement log. The server opens `FILE`
@@ -581,7 +748,7 @@ is also rejected if it resolves to the model artifact.
 Add `--request-log-jsonl profiles/bench/run/server.requests.jsonl` to the startup command to write
 the log at that path.
 
-Every line is one `ninfer_serve_request_log` schema-v17 JSON object. All events carry
+Every line is one `ninfer_serve_request_log` schema-v19 JSON object. All events carry
 `timestamp_unix_ms` and a process-unique `server_instance_id`; request IDs are monotonic only within
 that server instance. Successful request-start records include request-scoped acquisition,
 media-preprocessing wall/work, tokenizer, cache hit/miss/single-flight, and payload-size fields;
@@ -590,19 +757,23 @@ they do not infer request behavior from process-global counter deltas.
 | Event | Contents |
 |---|---|
 | `server_start` | target/weights identity and artifact, resolved Engine and context-cache capacities, registered thinking/non-thinking sampler defaults plus process overrides, thinking-history and thinking-budget defaults, Device arenas, the optional non-additive Vision layout inside the unified workspace, Host State/KV capacity and occupancy, KV sizing ledger, CUDA Graph allowance, CUDA/GPU environment, and redacted argv |
-| `request_start` | protocol, resolved sampler and seed, thinking mode and optional budget, Responses semantic-change flag, output budget, stream/message/tool shape |
-| `request_rejected` | parsed request shape, media-item count, `phase: "prepare"`, and the exact HTTP status/type/code/parameter/message for a synchronous preparation rejection |
-| `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, request-owned materialization cost/search/bound diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters |
-| `request_error` | the resolved request configuration and generation error message |
+| `request_start` | protocol, resolved sampler and seed, requested and effective reasoning effort, thinking mode and optional budget, Responses semantic-change flag, output budget, stream/message/tool shape |
+| `request_rejected` | parsed request shape, requested reasoning effort with unresolved effective value, media-item count, `phase: "prepare"`, and the exact HTTP status/type/code/parameter/message for a synchronous preparation rejection |
+| `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, request-owned materialization cost/search diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters |
+| `request_error` | the resolved request configuration and the generation, cancellation, or pre-outcome transport terminal message |
 | `throughput` | interval token/decode/context-cache pressure counter deltas, authoritative worker Host-work deltas, current scheduler/resource gauges, and decode-round batch statistics |
+
+`requested_reasoning_effort` is the client value or `null` when omitted.
+`resolved_reasoning_effort` is `none`, a native effort tier, or `null` when thinking is enabled but
+the template has no tiered default. A preparation rejection always leaves the resolved field
+`null`.
 
 `request_done.materialization` is the immutable decision committed for that request. It reports predicted immediate,
 future-loss and total nanoseconds; evaluated targets and projection work; planning/search nanoseconds; stop reason;
-model-optimal and budget-exhausted flags; the best remaining lower bound and absolute/relative gap; selected degradation
-units; and whether the selected target was the maximal root fallback. Stop reasons are `no_pressure`, `model_optimal`,
-`queue_exhausted`, `target_budget`, `expansion_capacity`, `time_budget`, and `value_of_next_expansion`.
-`model_optimal` is relative to the configured machine/cache-value model, semantic target graph, and canonical stage
-contract—not a claim that observed TTFT is globally optimal. Aborted planning attempts are not published.
+the budget-exhausted flag; selected degradation units; and whether the selected target was the maximal root fallback.
+Stop reasons are `no_pressure`, `queue_exhausted`, `target_budget`, `expansion_capacity`, `time_budget`, and
+`value_of_next_expansion`. Search is bounded and heuristic; these diagnostics do not claim model or global optimality.
+Aborted planning attempts are not published.
 
 `request_done.timings_seconds` contains `prepare`, `ttft`, `vision`, `prefill`, `decode`, and `total`
 as full-precision JSON numbers. Its `speculative` object contains `backend`, `draft_window`, `rounds`,
@@ -624,20 +795,22 @@ request is delayed by the full round, so these values explain request latency bu
 summed across concurrent requests**.
 
 The JSONL file contains no generated response text and never records an API-key value; `argv`
-replaces that value with `<redacted>`. The existing stderr summaries remain available for operators
-but are rounded and are not the aggregation source. Console lines use local
-`[YYYY-MM-DD HH:MM:SS.mmm] [level]` timestamps. OpenAI Responses, OpenAI Chat, and Anthropic
-generation requests receive a request ID when they enter synchronous preparation. Successful
-preparation produces `request_start`; a preparation failure produces `request_rejected` without a
-matching start. Later generation failures produce `request_error`. Schema/model validation
-rejections before preparation and token-count-only calls are not measurement requests and do not
-receive request IDs.
+replaces that value with `<redacted>`. Operational stderr summaries are rounded and are not the
+aggregation source. OpenAI Responses, OpenAI Chat, and Anthropic generation requests receive a
+request ID when they enter synchronous preparation. Successful preparation produces
+`request_start`; a preparation failure produces `request_rejected` without a matching start. Each
+started generation transaction then has exactly one machine terminal: `request_done` when Engine
+returns its outcome, or `request_error` when generation fails before an outcome exists. Later
+response rendering, Responses storage, or terminal transport failures are operational response
+events only and do not add a second JSONL terminal. Schema/model validation rejections before
+preparation and token-count-only calls are not measurement requests and do not receive request IDs.
 
 By default the server also reports aggregate activity every five seconds. `prefill` counts prompt
 suffix tokens actually computed during the interval, excluding prefix-cache hits; `decode` counts
 tokens finally committed by decode rounds, excluding the first token produced by prefill. For MTP
 and DFlash this is the accepted committed output, not draft or rejected tokens.
-`avg_decode_batch` is decode row-rounds divided by decode rounds during the same interval. The
+The operational field `average_decode_batch` and JSONL `average_size` are decode row-rounds divided
+by decode rounds during the same interval. The
 `running`, `prefilling`, `decode_ready`, `waiting`, `materializing`, `capture_pending`, and
 `terminal_pending` fields are the Engine scheduler snapshot at the end of the interval. The JSONL
 `context_cache` object reports selection, capture, transfer, COW, pressure spill, private/shared
@@ -654,8 +827,9 @@ mutually exclusive Host phases and their `total`; `device_wait_seconds` is separ
 `detail_subset_seconds` and `detail_invocations` expose admission, context-transaction, replica, and
 stats-publication slow paths; these detail values are already contained in a top-level Host phase
 and must not be added to `total`. Per-round, per-row-round, and per-invocation normalized values are
-`null` when their denominator is zero. The stderr interval line shows only total Host milliseconds,
-decode Host/device-wait microseconds per round, boundary, and maintenance; use JSONL for analysis.
+`null` when their denominator is zero. The operational interval record contains token rates,
+scheduler gauges, total Host-active milliseconds, and average decode batch; use JSONL for complete
+measurement analysis.
 Intervals with context materialization or retention activity are retained even when they contain no
 token execution; only fully idle intervals are omitted. Downstream measurement should prefer the
 raw counters and seconds over rounded stderr rates.
@@ -700,11 +874,11 @@ defined in [Resource scheduling and context cache](maintainer/resource-schedulin
 Compatible prefixes are reused for both text and multimodal histories unless the server starts with
 `--no-prefix-reuse`. A multimodal hit additionally requires matching token types, three-axis MRoPE
 positions, encoded-media digest, grid, and consumer spans. Media wholly inside a matched prefix
-skips Vision execution, while new suffix media is encoded normally. The completion log reports the
-reused token count as `cache=`.
+skips Vision execution, while new suffix media is encoded normally. The operational completion
+record reports the reused token count as `prefix_cache_hit_tokens=`.
 
-The completion log reports one of six reuse paths: `root`, `private_endpoint`,
-`private_turn_closure`, `private_response_replay`, `private_long_anchor`, or
+The operational completion record reports one of six `prefix_reuse_path` values: `root`,
+`private_endpoint`, `private_turn_closure`, `private_response_replay`, `private_long_anchor`, or
 `shared_stable_prefix`. Reuse validation covers KV, recurrent state, hidden state, selected-backend
 state, and the exact prompt frontier. With stable `preserve_thinking=true`, the auxiliary checkpoint
 rolls to the message frontier immediately before the current response's deterministic generation
