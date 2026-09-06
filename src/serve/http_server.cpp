@@ -222,7 +222,7 @@ HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> log
         static_cast<std::size_t>(options_.max_concurrency) + options_.max_pending_requests;
     const std::size_t worker_count = queued_requests + 1;
     server_.new_task_queue         = [queued_requests, worker_count] {
-        return new httplib::ThreadPool(worker_count, queued_requests);
+        return new httplib::ThreadPool(worker_count, worker_count, queued_requests);
     };
     server_.set_socket_options(configure_http_server_socket);
     server_.set_payload_max_length(options_.max_request_bytes);
@@ -291,11 +291,14 @@ void HttpServer::run_stats_reporter() {
     ninfer::RuntimeStats previous   = service_->runtime_stats();
     Clock::time_point previous_time = Clock::now();
     const auto interval             = std::chrono::milliseconds(options_.log_stats_interval_ms);
+    Clock::time_point next_deadline = previous_time + interval;
 
     for (;;) {
         {
             std::unique_lock lock(stats_mutex_);
-            if (stats_cv_.wait_for(lock, interval, [this] { return stats_stopping_; })) { break; }
+            if (stats_cv_.wait_until(lock, next_deadline, [this] { return stats_stopping_; })) {
+                break;
+            }
         }
 
         const ninfer::RuntimeStats current = service_->runtime_stats();
@@ -305,13 +308,18 @@ void HttpServer::run_stats_reporter() {
         if (report_has_activity(report)) { record_throughput(report); }
         previous      = current;
         previous_time = now;
+        next_deadline += interval;
+        const Clock::time_point after_write = Clock::now();
+        if (next_deadline <= after_write) { next_deadline = after_write + interval; }
     }
 
     const ninfer::RuntimeStats current = service_->runtime_stats();
     const Clock::time_point now        = Clock::now();
     const ThroughputReport tail        = make_throughput_report(
         previous, current, std::chrono::duration<double>(now - previous_time).count());
-    if (report_has_activity(tail)) { record_throughput(tail); }
+    // The exact partial interval remains useful to measurement consumers. Pretty throughput is a
+    // fixed-cadence operational record and deliberately has no irregular shutdown tail.
+    if (report_has_activity(tail)) { request_jsonl_.write_throughput(tail); }
 }
 
 void HttpServer::stop_stats_reporter() {
@@ -417,8 +425,11 @@ void HttpServer::register_routes() {
             }
         });
 
-    server_.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(nlohmann::json{{"status", "ok"}}.dump(), "application/json");
+    server_.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+        const bool available = service_ != nullptr && service_->is_available();
+        res.status           = available ? 200 : 503;
+        res.set_content(nlohmann::json{{"status", available ? "ok" : "unavailable"}}.dump(),
+                        "application/json");
     });
     server_.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models(req, res);

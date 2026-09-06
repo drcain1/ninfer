@@ -108,14 +108,14 @@ Run a one-shot CLI request with a 32,768-token allocation:
   --lm-head-draft
 ```
 
-Answer content is written to stdout. Structured startup/runtime-error records and the CLI-owned
+Answer content is written to stdout. Human-readable startup/runtime diagnostics and the CLI-owned
 reasoning, timing, throughput, memory, and speculative-decoding report are written to stderr;
 reasoning and the result report remain unprefixed product output. On a terminal, weight
-materialization additionally uses one transient progress line. Redirected stderr receives only
-persistent structured phase records, including rate-limited progress for long loads. Option and
-local input errors remain direct command diagnostics. Use `--messages FILE` and `--vision` for
-structured image/video input; see the [CLI guide](docs/cli.md) and
-[committed examples](examples/cli/).
+materialization uses one transient progress line followed by a compact Engine-ready summary.
+Redirected stderr receives persistent readable progress without terminal control sequences. Use
+`--log-level debug` for complete startup detail. Option and local input errors remain direct command
+diagnostics. Use `--messages FILE` and `--vision` for structured image/video input; see the
+[CLI guide](docs/cli.md) and [committed examples](examples/cli/).
 
 ## Resource-aware long-context reuse
 
@@ -180,24 +180,11 @@ limit. Text evaluation used 262,144 tokens except Qwen3.8-27B NVFP4, which used 
 fit the RTX 5090 after weights. Each score is one sample per problem; model cards contain the
 correct/total counts and evaluation notes.
 
-### Perplexity
-
-Run the fixed four-domain quick corpus through the artifact's tokenizer and Text model:
-
-```bash
-./build/apps/ninfer-perplexity models/qwen3_8_27b_nvfp4.ninfer \
-  --corpus eval/corpora/perplexity-1m/manifest.json \
-  --quick --kv-dtype fp8
-```
-
-The evaluator reports token-weighted fixed-window causal perplexity and writes a complete JSON
-record under `profiles/perplexity/`. See [Perplexity evaluation](docs/perplexity.md) for the metric,
-corpus, custom-text mode, and comparison rules.
-
 ## Startup notes
 
 GPU residency is fixed at process startup. `--spec` selects speculative decoding residency, and
-`--vision` selects Vision residency. DFlash is available for text-only Qwen3.6-35B-A3B execution.
+`--vision` independently selects Vision residency. Qwen3.6-35B-A3B DFlash can be combined with
+Vision; it accelerates generated-text decode after multimodal prefill, not Vision encode itself.
 
 ## Docker
 
@@ -237,14 +224,15 @@ All registered model IDs support:
 - image, multi-image, video, and mixed multimodal messages;
 - chunked prefill, exact-batch CUDA Graph decode, and startup-bounded batched decode;
 - MTP speculative decoding with draft windows from one to five;
-- BF16, INT8 group-64, and row-scaled FP8 E4M3 KV storage;
-- offline causal-perplexity scoring with the same Text model and selectable KV storage;
+- BF16, INT8, FP8, NVFP4, and K8V4 KV storage;
+- offline causal-perplexity scoring;
 - private and shared exact-prefix reuse with Device/Host State and KV retention;
 - model-aware sampling defaults and explicit sampler overrides;
 - OpenAI Responses Core, OpenAI Chat Completions, and Anthropic Messages, including streaming,
   tools, local response state, token counting, and usage accounting.
 
-The 35B-A3B target additionally supports text-only DFlash with draft windows from one to fifteen.
+The 35B-A3B target additionally supports DFlash with draft windows from one to fifteen for Text and
+image/video Vision prompts.
 
 The product boundary remains intentionally small:
 
@@ -275,6 +263,16 @@ capacities remain fixed for the process lifetime.
 - [Contributing](CONTRIBUTING.md)
 
 Run the relevant `--help` for the exact current option contract.
+
+## Support
+
+NInfer is a personal project that I develop out of interest. If you find it useful and would like
+to support its continued development, you can [support the project on Ko-fi](https://ko-fi.com/neroued).
+
+Support is entirely voluntary. It is not a purchase or investment and does not come with financial
+returns, promised services or features, or a role in project decisions. The project's direction,
+priorities, technical choices, and release schedule remain independently determined by the
+maintainer.
 
 ## License
 
