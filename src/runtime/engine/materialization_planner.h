@@ -924,8 +924,24 @@ private:
                            ? item.estimated_total_ns - parent.estimated_total_ns
                            : 0;
             };
-            const __uint128_t left  = static_cast<__uint128_t>(delta(cost)) * b;
-            const __uint128_t right = static_cast<__uint128_t>(delta(prior)) * a;
+            const auto wide_product = [](std::uint64_t x, std::uint64_t y) noexcept {
+                constexpr std::uint64_t limb_mask = std::numeric_limits<std::uint32_t>::max();
+                const std::uint64_t x_low         = x & limb_mask;
+                const std::uint64_t x_high        = x >> 32U;
+                const std::uint64_t y_low         = y & limb_mask;
+                const std::uint64_t y_high        = y >> 32U;
+                const std::uint64_t low_low       = x_low * y_low;
+                const std::uint64_t low_high      = x_low * y_high;
+                const std::uint64_t high_low      = x_high * y_low;
+                const std::uint64_t middle =
+                    (low_low >> 32U) + (low_high & limb_mask) + (high_low & limb_mask);
+                const std::uint64_t high =
+                    x_high * y_high + (low_high >> 32U) + (high_low >> 32U) + (middle >> 32U);
+                const std::uint64_t low = (middle << 32U) | (low_low & limb_mask);
+                return std::pair{high, low};
+            };
+            const auto left  = wide_product(delta(cost), b);
+            const auto right = wide_product(delta(prior), a);
             if (left != right) { return left < right; }
         }
         return cost.key() < prior.key();
