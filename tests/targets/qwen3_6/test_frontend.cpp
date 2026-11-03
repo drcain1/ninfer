@@ -405,11 +405,12 @@ bool throws_processor_budget(Callable&& callable) {
 }
 
 template <class Callable>
-bool throws_context_length(Callable&& callable) {
+bool throws_context_length(Callable&& callable, std::string_view message = {}) {
     try {
         callable();
     } catch (const ninfer::RequestError& error) {
-        return error.kind() == ninfer::RequestErrorKind::ContextLengthExceeded;
+        return error.kind() == ninfer::RequestErrorKind::ContextLengthExceeded &&
+               (message.empty() || error.what() == message);
     }
     return false;
 }
@@ -589,16 +590,23 @@ int test_context_capacity_guard() {
     const Frontend short_frontend = FrontendFactory::create_component(resources(), short_options);
     failures += check(short_frontend.count_tokens(input) == exact_count,
                       "exact token counting was incorrectly bounded by max_context");
-    failures += check(throws_context_length([&] { (void)short_frontend.prepare(input); }),
-                      "Frontend accepted a text prompt at max_context + 1");
+    const std::string bounded_message =
+        "maximum context length is " + std::to_string(short_options.max_context) +
+        " tokens, but the prepared prompt has at least " + std::to_string(exact_count) + " tokens";
+    failures += check(throws_context_length([&] { (void)short_frontend.prepare(input); },
+                                           bounded_message),
+                      "text context error did not report the bounded token count");
 
     std::vector<ninfer::TokenId> exact_tokens(exact_count, 0);
     failures += check(exact.prepare_tokens(exact_tokens).summary().prompt_tokens == exact_count,
                       "prepare_tokens rejected an exact-capacity token vector");
     exact_tokens.push_back(0);
     failures +=
-        check(throws_context_length([&] { (void)exact.prepare_tokens(std::move(exact_tokens)); }),
-              "prepare_tokens accepted a token vector at max_context + 1");
+        check(throws_context_length([&] { (void)exact.prepare_tokens(std::move(exact_tokens)); },
+                                    "maximum context length is " + std::to_string(exact_count) +
+                                        " tokens, but the prepared prompt has " +
+                                        std::to_string(exact_count + 1U) + " tokens"),
+              "token-vector context error did not report the exact token count");
 
     ninfer::targets::qwen3_6::FrontendOptions media_options = short_options;
     media_options.vision_enabled                            = true;
@@ -606,8 +614,8 @@ int test_context_capacity_guard() {
     failures += check(throws_context_length([&] {
                           (void)media_frontend.prepare(
                               image_text_input({0}, std::string(64, 'x'), "must-not-decode.bin"));
-                      }),
-                      "over-capacity media prompt was not rejected before media decoding");
+                      }, bounded_message),
+                      "over-capacity media prompt did not report its bounded token count");
 
     std::atomic<int> control_checks{0};
     ninfer::PreparationControl cancelled_during_tokenization{
@@ -1089,9 +1097,23 @@ int test_official_resource_guards() {
     nlohmann::json mismatched_config   = nlohmann::json::parse(mismatched.tokenizer_config_json);
     mismatched_config["chat_template"] = reasoning_effort_template_source();
     mismatched.tokenizer_config_json   = mismatched_config.dump();
-    failures +=
-        check(throws_invalid_argument([&] { (void)FrontendFactory::create_component(mismatched); }),
-              "different standalone and tokenizer-config chat templates were accepted");
+    // Official v3 artifacts may carry a different tokenizer-config copy. The standalone
+    // Jinja resource remains authoritative, including its reasoning-effort capabilities.
+    const Frontend standalone = FrontendFactory::create_component(mismatched, false);
+    const Frontend original   = FrontendFactory::create_component(resources(), false);
+    ninfer::PromptInput input;
+    ninfer::ChatMessage message;
+    message.role = ninfer::ChatRole::User;
+    message.parts.push_back(
+        ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text, .text = "x", .media = {}});
+    input.messages.push_back(std::move(message));
+    const auto standalone_prompt = standalone.prepare(input);
+    const auto original_prompt   = original.prepare(input);
+    failures += check(FrontendFactory::inspect(standalone_prompt).token_ids ==
+                          FrontendFactory::inspect(original_prompt).token_ids &&
+                          standalone.prompt_capabilities().reasoning_effort.xhigh ==
+                              original.prompt_capabilities().reasoning_effort.xhigh,
+                      "tokenizer-config template overrode the standalone Jinja resource");
 
     FrontendResources unknown = resources("{{ messages }}");
     failures +=
@@ -1755,6 +1777,49 @@ ninfer::targets::qwen3_6::PreparedPrompt thinking_prompt(const Frontend& fronten
     return frontend.prepare(std::move(input));
 }
 
+int test_thinking_accounting(const Frontend& frontend) {
+    int failures      = 0;
+    const auto prompt = thinking_prompt(frontend);
+    for (const bool raw : {false, true}) {
+        {
+            auto preview = frontend.make_output_session(prompt, {}, {.raw = raw}, {});
+            (void)preview.preview_model(std::array<ninfer::TokenId, 1>{0}, 20,
+                                        ninfer::FinishReason::OutputLimit);
+            failures += check(preview.thinking_stats().model_thinking_tokens == 0,
+                              "preview published unbudgeted thinking tokens");
+        }
+        auto session = frontend.make_output_session(prompt, {}, {.raw = raw}, {});
+        (void)session.preview_model(std::array<ninfer::TokenId, 2>{0, 3}, 20,
+                                    ninfer::FinishReason::OutputLimit);
+        (void)session.commit_preview();
+        failures += check(session.thinking_stats().model_thinking_tokens == 2,
+                          "unbudgeted thinking lost a partial closing marker");
+        (void)session.preview_model(std::array<ninfer::TokenId, 2>{4, 0}, 18,
+                                    ninfer::FinishReason::OutputLimit);
+        (void)session.commit_preview();
+        const auto stats = session.thinking_stats();
+        failures +=
+            check(stats.model_thinking_tokens == 3 && !stats.configured_budget && !stats.applied &&
+                      stats.injected_tokens == 0 && session.pending_control_tokens().empty() &&
+                      session.model_token_budget_remaining(16) == 16,
+                  "thinking accounting depends on presentation or counts post-close content");
+    }
+    auto stopped        = frontend.make_output_session(prompt, {}, {}, {});
+    const auto decision = stopped.preview_model(std::array<ninfer::TokenId, 3>{0, 6, 0}, 20,
+                                                ninfer::FinishReason::OutputLimit);
+    (void)stopped.commit_preview();
+    failures +=
+        check(decision.accepted_tokens == 2 && stopped.thinking_stats().model_thinking_tokens == 2,
+              "thinking count includes unaccepted tokens after EOS");
+    auto plain = frontend.make_output_session(frontend.prepare_tokens({0}), {}, {}, {});
+    (void)plain.preview_model(std::array<ninfer::TokenId, 1>{0}, 20,
+                              ninfer::FinishReason::OutputLimit);
+    (void)plain.commit_preview();
+    failures += check(plain.thinking_stats().model_thinking_tokens == 0,
+                      "non-thinking output increased the thinking count");
+    return failures;
+}
+
 int test_thinking_budget_control(const Frontend& frontend) {
     auto prompt = thinking_prompt(frontend);
     ninfer::StopPolicy stop;
@@ -2253,6 +2318,7 @@ int main() {
     failures += test_terminal_flush(frontend);
     failures += test_structured_tool_output();
     failures += test_reasoning_split(frontend);
+    failures += test_thinking_accounting(frontend);
     failures += test_thinking_budget_control(frontend);
     failures += test_utf8_and_hidden_eos(frontend);
     failures += test_media_cache_reuses_immutable_payload();

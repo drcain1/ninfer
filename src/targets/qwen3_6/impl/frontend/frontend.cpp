@@ -3,6 +3,7 @@
 #include <ninfer/targets/qwen3_6/frontend_resources.h>
 #include <ninfer/targets/qwen3_6/prepared_prompt.h>
 
+#include "runtime/contract/context_length.h"
 #include "targets/qwen3_6/impl/frontend/chat_template.h"
 #include "targets/qwen3_6/impl/frontend/media_cache.h"
 #include "targets/qwen3_6/impl/frontend/processor.h"
@@ -234,11 +235,6 @@ fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resource
         throw RequestError(RequestErrorKind::InvalidMedia, error.what());
     }
     throw std::logic_error("unknown Qwen3.6 processor error kind");
-}
-
-[[noreturn]] void throw_context_length_exceeded(std::uint32_t max_context) {
-    throw RequestError(RequestErrorKind::ContextLengthExceeded,
-                       "prepared prompt exceeds Engine max_context " + std::to_string(max_context));
 }
 
 void validate_registered_tokenizer(const fi::Tokenizer& tokenizer) {
@@ -959,10 +955,7 @@ public:
         state.in_reasoning        = split_reasoning;
         prefix_execution.tracking = starts_in_reasoning;
         semantic.budget           = thinking.budget;
-        // The presentation decoder already tracks normal reasoning output. Keep the independent
-        // semantic tracker dormant unless a cap needs it, so the default unlimited path does not
-        // decode every model token twice.
-        semantic.in_reasoning = starts_in_reasoning && thinking.budget.has_value();
+        semantic.in_reasoning      = starts_in_reasoning;
     }
 
     std::shared_ptr<const fi::Tokenizer> tokenizer;
@@ -1468,7 +1461,9 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
             std::chrono::duration<double>(Clock::now() - tokenize_started).count();
         fi::check_preparation_control(control, "tokenization");
         if (encoded.input_ids.size() > impl_->max_context) {
-            throw_context_length_exceeded(impl_->max_context);
+            throw RequestError(RequestErrorKind::ContextLengthExceeded,
+                               runtime::context_length_error_message(encoded.input_ids.size(),
+                                                                     impl_->max_context, true));
         }
         result.token_ids                   = std::move(encoded.input_ids);
         result.identity.rewrite_checkpoint = encoded.rewrite_checkpoint;
@@ -1546,7 +1541,9 @@ PreparedPrompt Frontend::prepare_tokens(std::vector<TokenId> token_ids,
                                         bool allow_prefix_identity) const {
     const auto start = Clock::now();
     if (token_ids.size() > impl_->max_context) {
-        throw_context_length_exceeded(impl_->max_context);
+        throw RequestError(RequestErrorKind::ContextLengthExceeded,
+                           runtime::context_length_error_message(token_ids.size(),
+                                                                 impl_->max_context));
     }
     (void)checked_token_count(token_ids.size());
     for (const TokenId token : token_ids) {

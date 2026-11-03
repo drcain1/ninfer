@@ -3,6 +3,7 @@
 #include "core/device.h"
 #include "core/nvtx.h"
 #include "core/startup.h"
+#include "runtime/contract/context_length.h"
 #include "runtime/contract/sampling.h"
 #include "runtime/contract/types.h"
 #include "runtime/engine/causal_score_core.h"
@@ -111,11 +112,6 @@ runtime::ResolvedRequestOptions resolve_request_options(const ModelSamplingDefau
     resolved.stop                              = std::move(options.stop);
     resolved.output                            = options.output;
     return resolved;
-}
-
-std::string context_capacity_error(std::size_t prompt_tokens, std::uint32_t max_context) {
-    return "prepared prompt has " + std::to_string(prompt_tokens) +
-           " tokens, exceeding Engine max_context " + std::to_string(max_context);
 }
 
 } // namespace
@@ -311,7 +307,8 @@ PreparedPrompt Engine::prepare_tokens(std::vector<TokenId> token_ids,
             if (target_ptr == nullptr) { throw std::logic_error("Engine target is not active"); }
             if (token_ids.size() > target_ptr->capacity) {
                 throw RequestError(RequestErrorKind::ContextLengthExceeded,
-                                   context_capacity_error(token_ids.size(), target_ptr->capacity));
+                                   runtime::context_length_error_message(token_ids.size(),
+                                                                         target_ptr->capacity));
             }
             auto prepared      = target_ptr->loaded->frontend.prepare_tokens(std::move(token_ids),
                                                                              allow_prefix_identity);
@@ -416,7 +413,8 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
     if (prompt_summary.prompt_tokens > impl_->options.max_context) {
         throw RequestError(
             RequestErrorKind::ContextLengthExceeded,
-            context_capacity_error(prompt_summary.prompt_tokens, impl_->options.max_context));
+            runtime::context_length_error_message(prompt_summary.prompt_tokens,
+                                                  impl_->options.max_context));
     }
     const double prepare_seconds = prompt.impl_->prepare.seconds;
     if (resolved_options.execution.requested_output_tokens == 0) {
