@@ -84,9 +84,11 @@ set_tests_properties(
   ninfer_state_store_test
   PROPERTIES SKIP_RETURN_CODE 77)
 
-ninfer_add_test(ninfer_host_timing_test
-  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_host_timing.cpp"
-  LIBRARIES ninfer_runtime_support)
+if(NINFER_BUILD_ENGINE)
+  ninfer_add_test(ninfer_host_timing_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_host_timing.cpp"
+    LIBRARIES ninfer_runtime_support)
+endif()
 
 ninfer_add_test(ninfer_weight_bank_test SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_weight_bank.cpp"
   LIBRARIES ninfer_core)

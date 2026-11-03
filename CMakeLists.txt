@@ -7,6 +7,7 @@ ninfer_validate_platform()
 
 # --- Global settings ---------------------------------------------------------
 option(NINFER_BUILD_ENGINE "Build models, frontend and Engine" ON)
+option(NINFER_BUILD_OPS "Build numerical operators" ON)
 option(NINFER_BUILD_APPS "Build the NInfer CLI, server and perplexity evaluator" ON)
 option(BUILD_TESTING "Build NInfer tests" OFF)
 option(NINFER_BUILD_BENCHMARKS "Build NInfer benchmarks" OFF)
@@ -14,6 +15,16 @@ option(NINFER_ENABLE_DISTRIBUTED "Build distributed execution and NCCL communica
 
 if(NINFER_BUILD_APPS AND NOT NINFER_BUILD_ENGINE)
   message(FATAL_ERROR "NINFER_BUILD_APPS requires NINFER_BUILD_ENGINE")
+endif()
+if(NINFER_BUILD_ENGINE AND NOT NINFER_BUILD_OPS)
+  message(FATAL_ERROR "NINFER_BUILD_ENGINE requires NINFER_BUILD_OPS")
+endif()
+if(NINFER_BUILD_BENCHMARKS AND NOT NINFER_BUILD_OPS)
+  message(FATAL_ERROR "NINFER_BUILD_BENCHMARKS requires NINFER_BUILD_OPS")
+endif()
+if(NINFER_TARGET STREQUAL "v100" AND NINFER_BUILD_OPS)
+  message(FATAL_ERROR
+    "V100 kernel port is incomplete; only the v100-core preset is currently available")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

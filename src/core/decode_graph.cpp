@@ -52,7 +52,11 @@ void DecodeGraphSection::capture(cudaStream_t stream, const std::function<void()
     cudaStreamCaptureStatus status;
     cudaGraph_t graph = nullptr;
     check_graph(
+#if CUDART_VERSION < 13000
+        cudaStreamGetCaptureInfo_v3(stream, &status, nullptr, &graph, nullptr, nullptr, nullptr),
+#else
         cudaStreamGetCaptureInfo(stream, &status, nullptr, &graph, nullptr, nullptr, nullptr),
+#endif
         "cudaStreamGetCaptureInfo");
     if (status != cudaStreamCaptureStatusActive)
         throw std::logic_error("a graph section requires an active parent capture");
@@ -120,14 +124,23 @@ DecodeGraphChild DecodeGraphDefinition::append_to(cudaStream_t stream) const {
     const cudaGraphNode_t* dependencies = nullptr;
     std::size_t count                   = 0;
     check_graph(
+#if CUDART_VERSION < 13000
+        cudaStreamGetCaptureInfo_v3(stream, &status, nullptr, &parent, &dependencies, nullptr, &count),
+#else
         cudaStreamGetCaptureInfo(stream, &status, nullptr, &parent, &dependencies, nullptr, &count),
+#endif
         "cudaStreamGetCaptureInfo");
     if (!ready() || status != cudaStreamCaptureStatusActive)
         throw std::logic_error("appending a child requires a definition and active capture");
     DecodeGraphChild child;
     check_graph(cudaGraphAddChildGraphNode(&child.node, parent, dependencies, count, graph_),
                 "cudaGraphAddChildGraphNode");
-    check_graph(cudaStreamUpdateCaptureDependencies(stream, &child.node, nullptr, 1,
+    check_graph(
+#if CUDART_VERSION < 13000
+                cudaStreamUpdateCaptureDependencies_v2(stream, &child.node, nullptr, 1,
+#else
+                cudaStreamUpdateCaptureDependencies(stream, &child.node, nullptr, 1,
+#endif
                                                     cudaStreamSetCaptureDependencies),
                 "cudaStreamUpdateCaptureDependencies");
     return child;

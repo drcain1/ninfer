@@ -2,7 +2,9 @@
 add_subdirectory(core)
 add_subdirectory(distributed)
 add_subdirectory(artifact)
-add_subdirectory(ops)
+if(NINFER_BUILD_OPS)
+  add_subdirectory(ops)
+endif()
 
 if(NINFER_BUILD_ENGINE)
   add_subdirectory(text)

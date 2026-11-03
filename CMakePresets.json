@@ -70,6 +70,18 @@
         "NINFER_BUILD_ENGINE": "OFF",
         "NINFER_BUILD_APPS": "OFF"
       }
+    },
+    {
+      "name": "v100-core",
+      "displayName": "V100 Core and Artifact port validation (no inference engine)",
+      "inherits": "product",
+      "cacheVariables": {
+        "NINFER_TARGET": "v100",
+        "NINFER_BUILD_ENGINE": "OFF",
+        "NINFER_BUILD_APPS": "OFF",
+        "NINFER_BUILD_OPS": "OFF",
+        "BUILD_TESTING": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -96,6 +108,10 @@
     {
       "name": "dgx-spark-dev",
       "configurePreset": "dgx-spark-dev"
+    },
+    {
+      "name": "v100-core",
+      "configurePreset": "v100-core"
     }
   ],
   "testPresets": [
@@ -123,6 +139,13 @@
     {
       "name": "dgx-spark-dev",
       "configurePreset": "dgx-spark-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "v100-core",
+      "configurePreset": "v100-core",
       "output": {
         "outputOnFailure": true
       }

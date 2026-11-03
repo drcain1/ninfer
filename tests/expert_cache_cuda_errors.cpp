@@ -43,18 +43,36 @@ cudaError_t CUDARTAPI cudaMemcpyAsync(void* to, const void* from, std::size_t by
     return result;
 }
 
+#if CUDART_VERSION < 13000
+cudaError_t CUDARTAPI cudaMemcpyBatchAsync(void** to, void** from, std::size_t* bytes,
+                                           std::size_t count, cudaMemcpyAttributes* attrs,
+                                           std::size_t* indices, std::size_t attr_count,
+                                           std::size_t* failed, cudaStream_t stream) {
+#else
 cudaError_t CUDARTAPI cudaMemcpyBatchAsync(void* const* to, const void* const* from,
                                            const std::size_t* bytes, std::size_t count,
                                            cudaMemcpyAttributes* attrs, std::size_t* indices,
                                            std::size_t attr_count, cudaStream_t stream) {
-    static const auto real = ninfer::test::next_symbol<cudaError_t (*)(
-        void* const*, const void* const*, const std::size_t*, std::size_t, cudaMemcpyAttributes*,
-        std::size_t*, std::size_t, cudaStream_t)>("cudaMemcpyBatchAsync");
+#endif
+#if CUDART_VERSION < 13000
+    using BatchCopy = cudaError_t (*)(void**, void**, std::size_t*, std::size_t,
+                                      cudaMemcpyAttributes*, std::size_t*, std::size_t,
+                                      std::size_t*, cudaStream_t);
+#else
+    using BatchCopy = cudaError_t (*)(void* const*, const void* const*, const std::size_t*,
+                                      std::size_t, cudaMemcpyAttributes*, std::size_t*,
+                                      std::size_t, cudaStream_t);
+#endif
+    static const auto real = ninfer::test::next_symbol<BatchCopy>("cudaMemcpyBatchAsync");
     if (trace.active && !trace.failed && trace.failure == Failure::IndexCopy && trace.copies == 1) {
         trace.failed = true;
         return cudaErrorInvalidValue;
     }
+#if CUDART_VERSION < 13000
+    const auto result = real(to, from, bytes, count, attrs, indices, attr_count, failed, stream);
+#else
     const auto result = real(to, from, bytes, count, attrs, indices, attr_count, stream);
+#endif
     if (trace.active && result == cudaSuccess) {
         trace.pending = true;
         ++trace.copies;

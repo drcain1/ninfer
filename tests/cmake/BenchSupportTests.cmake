@@ -9,11 +9,13 @@ if(NINFER_BUILD_ENGINE)
   target_include_directories(ninfer_bench_support_test PRIVATE ${PROJECT_SOURCE_DIR}/bench/inference)
 endif()
 
-ninfer_add_op_test(ninfer_bench_fixtures_test
-  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_bench_fixtures.cu"
-  LIBRARIES ninfer_ops)
-set_tests_properties(ninfer_bench_fixtures_test PROPERTIES LABELS "bench")
-target_include_directories(ninfer_bench_fixtures_test PRIVATE ${PROJECT_SOURCE_DIR}/bench/ops)
+if(NINFER_BUILD_OPS)
+  ninfer_add_op_test(ninfer_bench_fixtures_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_bench_fixtures.cu"
+    LIBRARIES ninfer_ops)
+  set_tests_properties(ninfer_bench_fixtures_test PROPERTIES LABELS "bench")
+  target_include_directories(ninfer_bench_fixtures_test PRIVATE ${PROJECT_SOURCE_DIR}/bench/ops)
+endif()
 
 add_executable(ninfer_context_cost_measure_test
   "${CMAKE_CURRENT_LIST_DIR}/../test_context_cost_measure.cpp"

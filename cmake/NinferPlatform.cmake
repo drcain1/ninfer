@@ -1,5 +1,5 @@
 set(NINFER_TARGET rtx5090 CACHE STRING "NInfer execution target")
-set_property(CACHE NINFER_TARGET PROPERTY STRINGS rtx5090 dgx_spark)
+set_property(CACHE NINFER_TARGET PROPERTY STRINGS rtx5090 dgx_spark v100)
 
 if(DEFINED NINFER_CONFIGURED_TARGET AND
    NOT NINFER_CONFIGURED_TARGET STREQUAL NINFER_TARGET)
@@ -10,6 +10,7 @@ endif()
 
 set(NINFER_TARGET_RTX5090 0)
 set(NINFER_TARGET_SPARK 0)
+set(NINFER_TARGET_V100 0)
 if(NINFER_TARGET STREQUAL "rtx5090")
   set(NINFER_TARGET_RTX5090 1)
   set(NINFER_CUDA_ARCHITECTURE 120a)
@@ -18,6 +19,10 @@ elseif(NINFER_TARGET STREQUAL "dgx_spark")
   set(NINFER_TARGET_SPARK 1)
   set(NINFER_CUDA_ARCHITECTURE 121a)
   set(NINFER_PROCESSOR_PATTERN "^(aarch64|arm64|ARM64)$")
+elseif(NINFER_TARGET STREQUAL "v100")
+  set(NINFER_TARGET_V100 1)
+  set(NINFER_CUDA_ARCHITECTURE 70)
+  set(NINFER_PROCESSOR_PATTERN "^(x86_64|amd64|AMD64)$")
 else()
   message(FATAL_ERROR "Unknown NINFER_TARGET '${NINFER_TARGET}'")
 endif()
@@ -39,6 +44,12 @@ ninfer_validate_cuda_architecture()
 function(ninfer_validate_platform)
   # The toolchain file can change CUDA architectures during project() initialization.
   ninfer_validate_cuda_architecture()
+  if(NINFER_TARGET STREQUAL "v100" AND
+     (CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 12.8 OR
+      NOT CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 13.0))
+    message(FATAL_ERROR
+      "v100 requires CUDA 12.8 or 12.9: Core uses CUDA 12.8 APIs and CUDA 13 removes sm_70")
+  endif()
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
      NOT CMAKE_SYSTEM_PROCESSOR MATCHES "${NINFER_PROCESSOR_PATTERN}")
     message(FATAL_ERROR
