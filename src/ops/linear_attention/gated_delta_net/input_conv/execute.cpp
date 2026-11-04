@@ -13,6 +13,12 @@ namespace ninfer::ops::detail::gdn_input {
 void launch_projection(const Tensor& x, const WeightOperands& weights, ProjectedOutputs out,
                        ProjectionPlan plan, const Scratch& scratch, cudaStream_t stream) {
     const auto& w = *weights.first;
+#if NINFER_TARGET_V100
+    if (weights.format == Format::Fp8 || weights.format == Format::Nvfp4) {
+        const Tensor outputs[]{out.qkv, out.z};
+        return volta_linear_projection(x, w, outputs, scratch.volta, stream);
+    }
+#endif
     switch (weights.format) {
     case Format::Q4Q5:
         q4_q5_gdn_input_dispatch(x, w, *weights.second, out.qkv, out.z, stream);

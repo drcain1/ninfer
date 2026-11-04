@@ -15,6 +15,10 @@ ProjectionPlan select_projection_plan(const WeightProfile& weights, std::int32_t
 
 ConvPlan select_conv_plan(const WeightProfile& weights, Batch batch) {
     ConvPlan plan{select_projection_plan(weights, batch.columns())};
+    if (NINFER_TARGET_V100 && (weights.format == Format::Fp8 || weights.format == Format::Nvfp4)) {
+        if (batch.rows == 1) plan.post = ProjectedConvKernel::TokenParallel;
+        return plan;
+    }
     switch (weights.format) {
     case Format::Q4Q5:
         if (batch.rows == 1 && (batch.tokens <= 3 || batch.tokens == 5 || batch.tokens == 6))
@@ -45,7 +49,7 @@ std::size_t convolution_capacity(const WeightProfile& weights, Publication publi
     validate_batch_interval(publication, batch, first, last);
     const auto at = [&](std::int32_t tokens) {
         const auto plan = select_conv_plan(weights, {tokens, batch});
-        return workspace_bytes(weights, plan.projection, tokens * batch,
+        return workspace_bytes(weights, plan, tokens * batch,
                                publication == Publication::Snapshot && plan.materialized());
     };
     std::size_t capacity = 0;

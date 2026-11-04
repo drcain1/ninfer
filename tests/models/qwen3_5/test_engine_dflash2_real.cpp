@@ -90,6 +90,9 @@ int main(int argc, char** argv) {
         options.speculative.draft_tokens             = k;
         options.speculative.proposal_head =
             optimized ? ninfer::ProposalHead::Optimized : ninfer::ProposalHead::Full;
+        // An explicit Host quota lets memory-constrained machines exercise the
+        // same prefix-retention checks without the large default cache reserve.
+        if (argc > 8) options.context_cache.host_capacity_bytes = std::stoull(argv[8]);
         const auto retained_states = argc > 7 ? std::stoul(argv[7]) : 3U;
         ninfer::test::qwen3_5::set_context_capacity(options, retained_states);
         ninfer::Engine engine(options);

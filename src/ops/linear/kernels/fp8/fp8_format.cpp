@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "core/weight.h"
 #include "ops/linear/kernels/fp8/fp8_format.h"
 
@@ -49,7 +50,10 @@ Fp8WeightGeometry validate_fp8_weight(const Weight& weight, const char* operatio
         checked_add(geometry.scale_plane_offset, geometry.scale_plane_bytes, operation);
 
     const std::int64_t scale_stride = static_cast<std::int64_t>(weight.n) * 2;
-    if (weight.qtype != QType::FP8_E4M3FN_ROW_BF16 || weight.layout != QuantLayout::RowScale ||
+    if (weight.qtype != QType::FP8_E4M3FN_ROW_BF16 ||
+        (weight.layout != QuantLayout::RowScale &&
+         !(NINFER_TARGET_V100 && weight.layout == QuantLayout::VoltaQpn && weight.n % 32 == 0 &&
+           weight.k % 128 == 0)) ||
         weight.scale_dtype != DType::BF16 ||
         weight.group_size != static_cast<std::uint32_t>(weight.k) || weight.group != weight.k ||
         weight.ndim != 2 || weight.shape[0] != weight.n || weight.shape[1] != weight.k ||

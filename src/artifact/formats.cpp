@@ -22,6 +22,7 @@ constexpr std::array kFormats = {
               std::string_view{"fp8_e4m3fn_block128x128_bf16"}},
 };
 constexpr std::array kLayouts = {
+    std::pair{QuantLayout::VoltaQpn, std::string_view{"volta_qpn_v1"}},
     std::pair{QuantLayout::Contiguous, std::string_view{"contiguous_le_v1"}},
     std::pair{QuantLayout::RowSplit, std::string_view{"row_split_k128_v1"}},
     std::pair{QuantLayout::RowScale, std::string_view{"row_scale_v1"}},

@@ -31,6 +31,7 @@ enum class QuantLayout : std::uint16_t {
     BatchedBlockScaleK16M128x4 = 5,
     BlockScaleM128K128         = 6,
     BlockScaleM64K64           = 7,
+    VoltaQpn                   = 8,
 };
 
 struct Weight {

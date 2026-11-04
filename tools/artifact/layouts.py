@@ -110,6 +110,8 @@ class RowPagedGeometry:
         return page * 4096 + slot * self.row_bytes
 
 
+VOLTA_QPN_V1 = Layout("volta_qpn_v1", 256, frozenset(("nvfp4", "fp8_e4m3fn_row_bf16")))
+
 CONTIGUOUS_LE_V1 = Layout("contiguous_le_v1", 256, frozenset(("bf16", "fp32", "int32")))
 ROW_SPLIT_K128_V1 = Layout(
     "row_split_k128_v1",
@@ -148,6 +150,7 @@ LAYOUTS = MappingProxyType(
             BATCHED_BLOCK_SCALE_K16_M128X4_V1,
             BLOCK_SCALE_M128_K128_V1,
             ROW_SCALE_V1,
+            VOLTA_QPN_V1,
             ROW_PAGED_G16_4K_V1,
         )
     }
@@ -375,6 +378,13 @@ def encoded_size(
         return block_scale_geometry(numeric_spec, shape).payload_bytes
     if layout_spec is BLOCK_SCALE_M128_K128_V1:
         return fp8_block_geometry(numeric_spec, shape).payload_bytes
+    if layout_spec is VOLTA_QPN_V1:
+        n, k = _shape(shape, rank=2)
+        if n % (128 if numeric_spec.name == "nvfp4" else 32) or k % 128:
+            raise ValueError("VoltaQpn requires aligned complete matrices")
+        if numeric_spec.name == "nvfp4":
+            return block_scale_geometry(numeric_spec, shape).payload_bytes
+        return row_scale_geometry(numeric_spec, shape).payload_bytes
     if layout_spec is ROW_SCALE_V1:
         if not isinstance(numeric_spec, Fp8RowFormat):
             raise ValueError("row_scale_v1 requires a row-scaled FP8 format")

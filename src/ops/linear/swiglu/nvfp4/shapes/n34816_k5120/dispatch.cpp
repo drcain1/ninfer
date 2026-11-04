@@ -1,4 +1,7 @@
 #include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/prepared.h"
+#endif
 #include "core/weight.h"
 #include "ops/linear/swiglu/nvfp4/dispatch.h"
 
@@ -61,6 +64,9 @@ std::size_t nvfp4_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy,
     }
     (void)select_route(policy, min_tokens);
     (void)select_route(policy, max_tokens);
+#if NINFER_TARGET_V100
+    return volta_linear_capacity(34816, 5120, max_tokens);
+#endif
     if (NINFER_TARGET_V100) return 0;
     if ((policy == LinearPolicy::A16Only || policy == LinearPolicy::AllowA8) || max_tokens <= 4) {
         return 0;
@@ -72,6 +78,12 @@ std::size_t nvfp4_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy,
 void nvfp4_linear_swiglu_dispatch(const Tensor& x, const Weight& weight, Tensor& out,
                                   LinearPolicy policy, MemoryArena& workspace,
                                   cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    (void)select_route(policy, x.ne[1]);
+    auto volta_scope = workspace.scope();
+    return volta_linear_swiglu(
+        x, weight, out, allocate_volta_linear(workspace, weight.n, weight.k, x.ne[1]), stream);
+#endif
     switch (select_route(policy, x.ne[1])) {
     case Nvfp4LinearSwiGluRoute::DecodeFusedA16:
         launch_nvfp4_swiglu_decode(x, weight, out, stream);

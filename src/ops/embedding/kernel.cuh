@@ -3,6 +3,7 @@
 #include "ops/common/numeric/math.h"
 #include "ops/common/quant/integer.cuh"
 #include "ops/common/quant/fp8.cuh"
+#include "ops/common/quant/volta_qpn.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -20,7 +21,7 @@ inline constexpr std::int32_t kEmbedGatherQ8D              = 2048;
 inline constexpr std::int32_t kEmbedGatherQ8Groups         = kEmbedGatherQ8D / kEmbedGatherQ8Group;
 inline constexpr std::int32_t kEmbedGatherFp8D             = 5120;
 
-template <int BlocksPerToken, int Threads>
+template <int BlocksPerToken, int Threads, bool Packed = false>
 __launch_bounds__(Threads) __global__
     void embed_gather_fp8_kernel(const std::int32_t* ids, const std::uint8_t* codes,
                                  const __nv_bfloat16* scales, __nv_bfloat16* out) {
@@ -39,8 +40,13 @@ __launch_bounds__(Threads) __global__
     auto* output_column    = out + static_cast<std::int64_t>(token) * kEmbedGatherFp8D;
     for (int word_index = static_cast<int>(threadIdx.x); word_index < kWordsPerBlock;
          word_index += Threads) {
-        const int offset    = split_offset + word_index * 4;
-        const unsigned word = *reinterpret_cast<const unsigned*>(code_row + offset);
+        const int offset            = split_offset + word_index * 4;
+        const std::uint8_t* address = code_row + offset;
+        if constexpr (Packed) {
+            const auto fragment = common::volta_qpn_fragment(row, offset / 16, kEmbedGatherFp8D);
+            address             = codes + fragment * 16 + offset % 16;
+        }
+        const unsigned word = *reinterpret_cast<const unsigned*>(address);
 #pragma unroll
         for (int pair = 0; pair < 2; ++pair) {
             const float2 decoded =

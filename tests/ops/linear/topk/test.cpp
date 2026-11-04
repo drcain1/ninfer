@@ -1,4 +1,5 @@
 #include "core/weight.h"
+#include "core/platform.h"
 #include "cuda_fixture.h"
 #include "core/buffer.h"
 #include "ninfer/ops/linear_topk.h"
@@ -175,8 +176,17 @@ void patch_rowsplit_row(FixtureWeight& fixture, QType qtype, std::int32_t row, f
 void patch_fp8_row(FixtureWeight& fixture, std::int32_t row, float factor) {
     std::vector<std::uint8_t> codes(kHidden);
     for (std::int32_t k = 0; k < kHidden; ++k) { codes[static_cast<std::size_t>(k)] = fp8_code(k); }
-    fixture.payload.copy_from_host(codes.data(), codes.size(),
-                                   static_cast<std::size_t>(row) * kHidden);
+    if (fixture.weight.layout == QuantLayout::VoltaQpn) {
+        const int lane = (row & 3) + ((row >> 3) & 3) * 4 + ((row >> 2) & 1) * 16;
+        for (int k = 0; k < kHidden; k += 16) {
+            const auto offset =
+                ((std::size_t(row / 32) * (kHidden / 16) + k / 16) * 32 + lane) * 16;
+            fixture.payload.copy_from_host(codes.data() + k, 16, offset);
+        }
+    } else {
+        fixture.payload.copy_from_host(codes.data(), codes.size(),
+                                       static_cast<std::size_t>(row) * kHidden);
+    }
     const std::uint16_t scale = f32_to_bf16(factor);
     fixture.payload.copy_from_host(&scale, sizeof(scale),
                                    static_cast<std::size_t>(fixture.scale_offset) +
@@ -317,6 +327,7 @@ struct Profile {
     std::int32_t rows;
     std::span<const std::int32_t> winner_rows;
     bool mapped_ids;
+    bool packed = false;
 };
 
 int run_profile(const Profile& profile, DeviceBuffer& hidden, const std::vector<double>& base_score,
@@ -325,6 +336,7 @@ int run_profile(const Profile& profile, DeviceBuffer& hidden, const std::vector<
     FixtureWeight fixture = profile.qtype == QType::FP8_E4M3FN_ROW_BF16
                                 ? make_fp8()
                                 : make_rowsplit(profile.qtype, profile.rows);
+    if (profile.packed) fixture.weight.layout = QuantLayout::VoltaQpn;
     for (std::size_t index = 0; index < profile.winner_rows.size(); ++index) {
         if (profile.qtype == QType::FP8_E4M3FN_ROW_BF16) {
             patch_fp8_row(fixture, profile.winner_rows[index], factor_for(index));
@@ -471,6 +483,14 @@ int main(int argc, char** argv) {
          .rows        = kShortRows,
          .winner_rows = kShortWinnerRows,
          .mapped_ids  = true},
+#if NINFER_TARGET_V100
+        {.qtype       = QType::FP8_E4M3FN_ROW_BF16,
+         .label       = "fp8-volta",
+         .rows        = kFullRows,
+         .winner_rows = kFullWinnerRows,
+         .mapped_ids  = false,
+         .packed      = true},
+#endif
     };
     for (const auto& profile : profiles) {
         struct Invocation {
@@ -492,7 +512,8 @@ int main(int argc, char** argv) {
                 ops::LinearPolicy::A16Only,
                 call.graph ? linear_suite::Execution::Graph : linear_suite::Execution::Eager,
                 std::string(profile.mapped_ids ? "mapped" : "valid-prefix") +
-                    (call.ties ? "/zero-ties" : "/ranked")));
+                    (call.ties ? "/zero-ties" : "/ranked") +
+                    (profile.packed ? "/volta-packed" : "")));
         suite.add(std::move(cases), [profile, calls](auto selected, auto declared) {
             std::vector<int> eager, graph;
             bool ties = false;

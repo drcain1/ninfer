@@ -33,6 +33,7 @@ struct Profile {
     std::uint32_t seed;
     ops::LinearPolicy policy;
     float clamp_limit = 0.0f;
+    bool volta_packed = false;
 };
 
 void add_profile(Suite& suite, const Profile& profile, std::span<const std::int32_t> token_cases,

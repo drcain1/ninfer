@@ -66,10 +66,13 @@ int run_append_case(CudaExecutionView execution, const Geometry& geometry, KvCac
                                     static_cast<std::size_t>(test_case.tokens);
     const float amplitude = test_case.qk_amplitude;
     std::vector<float> q  = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
+    for (auto& value : q) value *= test_case.query_gain;
     if (test_case.zero_q) std::fill(q.begin(), q.end(), 0.0f);
     std::vector<float> k =
         make_bf16_values(kv_elements, test_case.seed + 1u, -amplitude, amplitude);
-    std::vector<float> v = make_bf16_values(kv_elements, test_case.seed + 2u, -1.0f, 1.0f);
+    std::vector<float> v =
+        make_bf16_values(kv_elements, test_case.seed + 2u, -test_case.append_value_amplitude,
+                         test_case.append_value_amplitude);
     inject_codec_edges(geometry, test_case.tokens, k, v);
     std::vector<std::int32_t> positions(static_cast<std::size_t>(test_case.tokens));
     for (std::int32_t token = 0; token < test_case.tokens; ++token) {
@@ -195,10 +198,12 @@ int run_cached_case(CudaExecutionView execution, const Geometry& geometry, KvCac
                                    static_cast<std::size_t>(test_case.tokens);
     const float amplitude = test_case.qk_amplitude;
     std::vector<float> q  = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
+    for (auto& value : q) value *= test_case.query_gain;
     if (test_case.zero_q) std::fill(q.begin(), q.end(), 0.0f);
     std::vector<std::int32_t> positions(static_cast<std::size_t>(test_case.tokens));
     for (std::int32_t token = 0; token < test_case.tokens; ++token) {
-        positions[static_cast<std::size_t>(token)] = test_case.base + token;
+        positions[static_cast<std::size_t>(token)] =
+            test_case.base + (test_case.reverse_positions ? test_case.tokens - 1 - token : token);
     }
     const ops::CausalAttentionExecutionEnvelope envelope{static_cast<std::uint32_t>(total),
                                                          test_case.envelope_max};

@@ -1,4 +1,6 @@
 #pragma once
+#include "ops/volta_pack.h"
+#include <optional>
 
 #include "cuda_fixture.h"
 #include "core/buffer.h"
@@ -46,23 +48,31 @@ inline std::vector<float> make_bf16_activation(std::int32_t rows, std::int32_t t
 
 class DevicePackedWeight {
 public:
-    explicit DevicePackedWeight(quantized_weight::PackedWeight packed)
+    explicit DevicePackedWeight(quantized_weight::PackedWeight packed, bool volta_packed = false)
         : host(std::move(packed)),
           device(ninfer::test::cuda_environment().context.device(), host.payload.size()) {
-        device.copy_from_host(host.payload.data(), host.payload.size());
+        if (volta_packed) {
+            encoded.emplace(host);
+            pack_volta_weight(*encoded);
+        }
+        const auto& physical = encoded ? *encoded : host;
+        device.copy_from_host(physical.payload.data(), physical.payload.size());
     }
 
-    Weight view() const { return host.device_weight(device.span()); }
+    Weight view() const { return (encoded ? *encoded : host).device_weight(device.span()); }
 
     int verify_preserved(std::string_view label) const {
         std::vector<std::uint8_t> after(host.payload.size());
         device.copy_to_host(after.data(), after.size());
-        if (after == host.payload) { return 0; }
+        if (after == (encoded ? encoded->payload : host.payload)) { return 0; }
         std::cerr << label << ": packed weight was modified\n";
         return 1;
     }
 
+    // Mathematical references keep the original logical words; only device bytes
+    // and the native layout descriptor use the optional physical permutation.
     quantized_weight::PackedWeight host;
+    std::optional<quantized_weight::PackedWeight> encoded;
     DeviceBuffer device;
 };
 

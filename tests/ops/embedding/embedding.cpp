@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "ops/suite.h"
 #include "core/weight.h"
 #include "cuda_fixture.h"
@@ -452,8 +453,8 @@ struct Fp8Row {
 
 class Fp8Table {
 public:
-    Fp8Table()
-        : code_plane_bytes_(static_cast<std::size_t>(kVocab) * kFp8D),
+    explicit Fp8Table(bool packed = false)
+        : packed_(packed), code_plane_bytes_(static_cast<std::size_t>(kVocab) * kFp8D),
           scale_offset_(align_up(code_plane_bytes_, 256)),
           payload_(scale_offset_ + static_cast<std::size_t>(kVocab) * 2) {
         for (const std::int32_t row : dflash2_fixture_ids()) {
@@ -465,7 +466,7 @@ public:
         auto* base = static_cast<std::uint8_t*>(payload_.data());
         Weight result{};
         result.qtype            = QType::FP8_E4M3FN_ROW_BF16;
-        result.layout           = QuantLayout::RowScale;
+        result.layout           = packed_ ? QuantLayout::VoltaQpn : QuantLayout::RowScale;
         result.scale_dtype      = DType::BF16;
         result.device           = payload_.device();
         result.payload          = base;
@@ -509,7 +510,8 @@ public:
         int failures = payload_.verify_guards(label);
         for (const Fp8Row& row : rows_) {
             std::vector<std::uint8_t> got(row.codes.size());
-            payload_.copy_to_host(got.data(), got.size(), static_cast<std::size_t>(row.id) * kFp8D);
+            for (int d = 0; d < kFp8D; d += 16)
+                payload_.copy_to_host(got.data() + d, 16, code_offset(row.id, d));
             failures += verify_exact(label, got, row.codes);
             std::uint8_t scale_bytes[2]{};
             payload_.copy_to_host(scale_bytes, sizeof(scale_bytes),
@@ -525,6 +527,13 @@ public:
     }
 
 private:
+    std::size_t code_offset(int row, int d) const {
+        if (!packed_) return std::size_t(row) * kFp8D + d;
+        // Test-owned fragment map; the oracle remains the original row's numeric words.
+        const int lane = (row & 3) + ((row >> 3) & 3) * 4 + ((row >> 2) & 1) * 16;
+        return ((std::size_t(row / 32) * (kFp8D / 16) + d / 16) * 32 + lane) * 16;
+    }
+
     const Fp8Row* find(std::int32_t id) const {
         const auto it = std::find_if(rows_.begin(), rows_.end(),
                                      [id](const Fp8Row& row) { return row.id == id; });
@@ -544,8 +553,8 @@ private:
             if ((code & 0x7fu) == 0x7fu) --code;
             row.codes[d] = id == 0 ? 0 : code;
         }
-        payload_.copy_from_host(row.codes.data(), row.codes.size(),
-                                static_cast<std::size_t>(id) * kFp8D);
+        for (int d = 0; d < kFp8D; d += 16)
+            payload_.copy_from_host(row.codes.data() + d, 16, code_offset(id, d));
         const std::uint8_t scale_bytes[]{static_cast<std::uint8_t>(row.scale),
                                          static_cast<std::uint8_t>(row.scale >> 8)};
         payload_.copy_from_host(scale_bytes, sizeof(scale_bytes),
@@ -553,6 +562,7 @@ private:
         rows_.push_back(std::move(row));
     }
 
+    bool packed_;
     std::size_t code_plane_bytes_;
     std::size_t scale_offset_;
     GuardedDeviceBuffer payload_;
@@ -746,6 +756,10 @@ void add_embedding_cases(ninfer::test::OpSuite& suite) {
                                  [] { return Q8Table(kQ8TextD); });
     add_quantized_cases<Fp8Table>(suite, "fp8", kFp8D, false, text_cases(4),
                                   [] { return Fp8Table{}; });
+#if NINFER_TARGET_V100
+    add_quantized_cases<Fp8Table>(suite, "fp8-volta", kFp8D, false, text_cases(4),
+                                  [] { return Fp8Table{true}; });
+#endif
     suite.add("embedding/fp8/scale_contract",
               [] {
                   Fp8Table table;

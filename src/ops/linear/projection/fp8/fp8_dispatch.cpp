@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/prepared.h"
+#endif
 #include "ops/linear/projection/fp8/fp8_dispatch.h"
 #include "ops/common/host/operands.h"
 #include "ops/linear/projection/fp8/fp8_shapes.h"
@@ -22,6 +26,9 @@ std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t n, std::int32_t k, 
     if (min_tokens <= 0 || max_tokens < min_tokens)
         throw std::invalid_argument("fp8 linear workspace: invalid token interval");
     const auto& shape = resolve_shape(n, k, policy);
+#if NINFER_TARGET_V100
+    return volta_linear_capacity(n, k, max_tokens);
+#endif
     return allows_a8(policy) && shape.uses_a8(min_tokens, max_tokens)
                ? fp8_a8_workspace_capacity_bytes(
                      max_tokens, k,
@@ -34,6 +41,15 @@ void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPoli
     common::validate_fp8_weight(weight, "fp8 linear");
     if (x.ne[1] <= 0) throw std::invalid_argument("fp8 linear: T must be positive");
     const auto& shape = resolve_shape(weight.n, weight.k, policy);
+#if NINFER_TARGET_V100
+    if (workspace) {
+        auto scope         = workspace->scope();
+        const auto scratch = allocate_volta_linear(*workspace, weight.n, weight.k, x.ne[1]);
+        return volta_linear_projection(x, weight, {&out, 1}, scratch, stream);
+    }
+    if (weight.layout == QuantLayout::VoltaQpn)
+        throw std::invalid_argument("Volta-packed projection requires caller workspace");
+#endif
     if (!allows_a8(policy) || !shape.uses_a8(x.ne[1], x.ne[1]))
         return shape.a16(x, weight, out, stream);
     if (workspace == nullptr)

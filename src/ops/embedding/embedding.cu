@@ -279,15 +279,21 @@ EmbeddingLaunch select_q8(const Weight& table, const Tensor& out) {
     return launch_q8_scalar;
 }
 
-template <int Blocks>
+template <int Blocks, bool Packed = false>
 void launch_fp8(const Tensor& ids, const Weight& table, Tensor& out, cudaStream_t stream) {
     constexpr int threads = 128;
-    kernels::embed_gather_fp8_kernel<Blocks, threads><<<ids.ne[0] * Blocks, threads, 0, stream>>>(
-        static_cast<const std::int32_t*>(ids.data), static_cast<const std::uint8_t*>(table.qdata),
-        static_cast<const __nv_bfloat16*>(table.scales), static_cast<__nv_bfloat16*>(out.data));
+    kernels::embed_gather_fp8_kernel<Blocks, threads, Packed>
+        <<<ids.ne[0] * Blocks, threads, 0, stream>>>(
+            static_cast<const std::int32_t*>(ids.data),
+            static_cast<const std::uint8_t*>(table.qdata),
+            static_cast<const __nv_bfloat16*>(table.scales), static_cast<__nv_bfloat16*>(out.data));
 }
 
-EmbeddingLaunch select_fp8(const Tensor& out) {
+EmbeddingLaunch select_fp8(const Weight& table, const Tensor& out) {
+#if NINFER_TARGET_V100
+    if (table.layout == QuantLayout::VoltaQpn)
+        return out.ne[1] <= 176 ? launch_fp8<10, true> : launch_fp8<5, true>;
+#endif
     return out.ne[1] <= 176 ? launch_fp8<10> : launch_fp8<5>;
 }
 
@@ -333,7 +339,7 @@ void embedding(const Tensor& ids, const Weight& table, Tensor& out, CudaExecutio
         require_fp8_metadata(table, out);
         if (is_empty_T(ids, out)) { return; }
         require_non_empty_tensors(ids, out);
-        select_fp8(out)(ids, table, out, stream);
+        select_fp8(table, out)(ids, table, out, stream);
         break;
     default:
         throw std::invalid_argument("embedding: unsupported table qtype");

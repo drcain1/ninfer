@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "ops/common/host/operands.h"
 
 #include <cmath>
@@ -37,7 +38,10 @@ Fp8WeightGeometry validate_fp8_weight(const Weight& weight, const char* operatio
         checked_add(geometry.scale_plane_offset, geometry.scale_plane_bytes, operation);
 
     const std::int64_t scale_stride = static_cast<std::int64_t>(weight.n) * 2;
-    if (weight.qtype != QType::FP8_E4M3FN_ROW_BF16 || weight.layout != QuantLayout::RowScale ||
+    if (weight.qtype != QType::FP8_E4M3FN_ROW_BF16 ||
+        (weight.layout != QuantLayout::RowScale &&
+         !(NINFER_TARGET_V100 && weight.layout == QuantLayout::VoltaQpn && weight.n % 32 == 0 &&
+           weight.k % 128 == 0)) ||
         weight.scale_dtype != DType::BF16 ||
         weight.group_size != static_cast<std::uint32_t>(weight.k) || weight.group != weight.k ||
         weight.ndim != 2 || weight.shape[0] != weight.n || weight.shape[1] != weight.k ||
@@ -75,7 +79,9 @@ Nvfp4WeightGeometry validate_nvfp4_weight(const Weight& weight, const char* oper
         checked_add(checked_add(geometry.scale_plane_offset, geometry.scale_plane_bytes, operation),
                     sizeof(float), operation);
 
-    if (weight.qtype != QType::NVFP4 || weight.layout != QuantLayout::BlockScaleK16M128x4 ||
+    if (weight.qtype != QType::NVFP4 ||
+        (weight.layout != QuantLayout::BlockScaleK16M128x4 &&
+         !(NINFER_TARGET_V100 && weight.layout == QuantLayout::VoltaQpn && weight.k % 128 == 0)) ||
         weight.scale_dtype != DType::FP8_E4M3FN || weight.group_size != 16 || weight.group != 16 ||
         weight.ndim != 2 || weight.shape[0] != weight.n || weight.shape[1] != weight.k ||
         weight.padded_shape[0] != weight.n || weight.padded_shape[1] != weight.k ||

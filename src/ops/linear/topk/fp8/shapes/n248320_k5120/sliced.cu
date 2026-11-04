@@ -14,7 +14,7 @@ void launch_tile(const Tensor& hidden, const Weight& head, const Tensor*,
             static_cast<const std::uint8_t*>(head.qdata),
             static_cast<const __nv_bfloat16*>(head.scales), valid_rows,
             static_cast<std::uint64_t*>(workspace.partial_keys.data), workspace.producer_groups,
-            hidden.ne[1]);
+            hidden.ne[1], head.layout == QuantLayout::VoltaQpn);
     CUDA_CHECK(cudaGetLastError());
 }
 

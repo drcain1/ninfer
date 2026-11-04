@@ -1,3 +1,4 @@
+#include "ops/volta_pack.h"
 #include "core/weight.h"
 #include "cuda_fixture.h"
 #include "ops/linear/swiglu/runner.h"
@@ -264,6 +265,7 @@ static int run_profile(std::string_view label, const Profile& profile,
         graph_context.emplace();
     }
 
+    if (profile.volta_packed) pack_volta_weight(host_weight);
     test::GuardedDeviceBuffer device_weight(host_weight.payload.size());
     device_weight.copy_from_host(host_weight.payload.data(), host_weight.payload.size());
     const Weight weight = host_weight.device_weight(device_weight.span());
@@ -483,6 +485,7 @@ void add_profile(Suite& suite, const Profile& profile, std::span<const std::int3
     std::vector<linear_suite::Case> cases;
     for (auto& call : calls) {
         const std::string recipe = "s" + std::to_string(profile.seed) +
+                                   (profile.volta_packed ? "/volta-packed" : "") +
                                    (profile.clamp_limit > 0 ? "/clamped/" : "/dense-sparse/") +
                                    (call.form == CallForm::Convenience       ? "convenience"
                                     : call.form == CallForm::RejectA16Extent ? "reject-extent"

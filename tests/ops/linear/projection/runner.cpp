@@ -1,3 +1,4 @@
+#include "ops/volta_pack.h"
 #include "core/weight.h"
 #include "core/weight_view.h"
 #include "cuda_fixture.h"
@@ -262,6 +263,8 @@ static int run_shape(std::string_view label, ActivationRecipe recipe, WeightGene
         }
     }
 
+    if (shape.volta_packed) pack_volta_weight(host_weight);
+
     DeviceBuffer device_activation(ninfer::test::cuda_environment().context.device(),
                                    activation_bits.size() * sizeof(std::uint16_t));
     device_activation.copy_from_host(activation_bits.data(), device_activation.size());
@@ -415,6 +418,7 @@ void add_shape(Suite& suite, QType format, ActivationRecipe recipe, WeightGenera
     std::string fixture = "s" + std::to_string(shape.seed) +
                           (recipe == ActivationRecipe::TokenBlocks ? "/token-blocks" : "/hashed") +
                           (shape.comparison == Comparison::Full ? "/full" : "/sampled");
+    if (shape.volta_packed) fixture += "/volta-packed";
     if (shape.activation_generator) fixture += "/projection-recipe";
     if (shape.activation_pattern == ActivationPattern::KTail) fixture += "/k-tail";
     if (shape.activation_pattern == ActivationPattern::Cancellation) fixture += "/cancellation";

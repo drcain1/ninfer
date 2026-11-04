@@ -15,7 +15,8 @@ struct Profile {
     int hidden;
     const char* name;
 
-    int qk_rows = 2048;
+    int qk_rows       = 2048;
+    bool volta_packed = false;
 
     int value_rows() const { return qk_rows == 1024 ? 3072 : (hidden == 2048 ? 4096 : 6144); }
 };

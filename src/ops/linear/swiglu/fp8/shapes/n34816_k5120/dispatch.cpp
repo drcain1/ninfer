@@ -1,4 +1,7 @@
 #include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/prepared.h"
+#endif
 #include "core/weight.h"
 #include "ops/linear/swiglu/fp8/dispatch.h"
 
@@ -42,6 +45,9 @@ std::size_t fp8_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy, std:
     }
     (void)select_route(policy, min_tokens);
     (void)select_route(policy, max_tokens);
+#if NINFER_TARGET_V100
+    return volta_linear_capacity(34816, 5120, max_tokens);
+#endif
     const bool interval_uses_a8 = !NINFER_TARGET_V100 && allows_a8(policy) && max_tokens >= 5;
     return interval_uses_a8 ? fp8_a8_workspace_capacity_bytes(
                                   max_tokens, Fp8N34816K5120::kInputRows,
@@ -51,6 +57,12 @@ std::size_t fp8_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy, std:
 
 void fp8_linear_swiglu_dispatch(const Tensor& x, const Weight& weight, Tensor& out,
                                 LinearPolicy policy, MemoryArena& workspace, cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    (void)select_route(policy, x.ne[1]);
+    auto volta_scope = workspace.scope();
+    return volta_linear_swiglu(
+        x, weight, out, allocate_volta_linear(workspace, weight.n, weight.k, x.ne[1]), stream);
+#endif
     if (select_route(policy, x.ne[1]) == Fp8LinearSwiGluRoute::A16) {
         launch_a16(x, weight, out, stream);
         return;

@@ -1,7 +1,10 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/prepared.h"
+#endif
 #include "ops/linear/projection/nvfp4/nvfp4_dispatch.h"
 #include "ops/common/host/operands.h"
 #include "ops/linear/projection/nvfp4/nvfp4_shapes.h"
-#include "core/platform.h"
 #include <array>
 #include <stdexcept>
 
@@ -30,6 +33,9 @@ std::size_t nvfp4_linear_workspace_capacity_bytes(std::int32_t n, std::int32_t k
     if (min_tokens <= 0 || max_tokens < min_tokens)
         throw std::invalid_argument("nvfp4 linear workspace: invalid token interval");
     const auto& shape = resolve_shape(n, k, policy);
+#if NINFER_TARGET_V100
+    return volta_linear_capacity(n, k, max_tokens);
+#endif
     return allows_a4(policy) && shape.uses_a4(min_tokens, max_tokens)
                ? nvfp4_a4_workspace_capacity_bytes(max_tokens, k)
                : 0;
@@ -40,6 +46,15 @@ void nvfp4_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPo
     common::validate_nvfp4_weight(weight, "nvfp4 linear");
     if (x.ne[1] <= 0) throw std::invalid_argument("nvfp4 linear: T must be positive");
     const auto& shape = resolve_shape(weight.n, weight.k, policy);
+#if NINFER_TARGET_V100
+    if (workspace) {
+        auto scope         = workspace->scope();
+        const auto scratch = allocate_volta_linear(*workspace, weight.n, weight.k, x.ne[1]);
+        return volta_linear_projection(x, weight, {&out, 1}, scratch, stream);
+    }
+    if (weight.layout == QuantLayout::VoltaQpn)
+        throw std::invalid_argument("Volta-packed projection requires caller workspace");
+#endif
     if (!allows_a4(policy) || !shape.uses_a4(x.ne[1], x.ne[1]))
         return shape.a16(x, weight, out, stream);
     if (workspace == nullptr)

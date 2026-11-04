@@ -12,6 +12,13 @@ std::vector<int> ragged(int width, int batch) {
 }
 
 std::vector<RecordCase> cases(Profile p) {
+    if (p.volta_packed) {
+        const auto policy =
+            p.format == QType::NVFP4 ? ops::LinearPolicy::AllowA4 : ops::LinearPolicy::A16Only;
+        return {{2, 2, {2, 1}, 9193, policy},
+                {4, 8, {4, 3, 2, 1, 4, 3, 2, 1}, 9195, policy},
+                {5, 1, {5}, 9197, policy}};
+    }
     using Policy = ops::LinearPolicy;
     std::vector<RecordCase> result;
     if (p.qk_rows == 1024) {
@@ -82,6 +89,10 @@ int main(int argc, char** argv) {
     });
 #endif
     std::vector<Profile> selected_profiles(std::begin(profiles), std::end(profiles));
+#if NINFER_TARGET_V100
+    selected_profiles.push_back({QType::FP8_E4M3FN_ROW_BF16, 5120, "fp8-volta", 2048, true});
+    selected_profiles.push_back({QType::NVFP4, 5120, "nvfp4-volta", 2048, true});
+#endif
 #if NINFER_TARGET_SPARK
     selected_profiles.push_back(local_profile);
 #endif

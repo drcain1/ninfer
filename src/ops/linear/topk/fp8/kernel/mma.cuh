@@ -1,4 +1,5 @@
 #pragma once
+#include "ops/common/quant/volta_qpn.cuh"
 #include "ops/common/quant/fp8.cuh"
 #include "ops/common/cuda/reduce.cuh"
 #include "ops/common/cuda/pipeline.cuh"
@@ -58,7 +59,8 @@ __global__
 __launch_bounds__(MmaSchedule<TileColumns, kBlockK>::kThreads, 2) void fp8_mma_linear_topk_kernel(
     const __nv_bfloat16* __restrict__ hidden, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, std::int32_t valid_rows,
-    std::uint64_t* __restrict__ partial_keys, std::int32_t producer_groups, std::int32_t columns) {
+    std::uint64_t* __restrict__ partial_keys, std::int32_t producer_groups, std::int32_t columns,
+    bool packed_layout) {
     constexpr int kKTiles       = kLinearTopKHidden / kBlockK;
     constexpr int kBlockRows    = 64;
     constexpr int kSortItems    = 2;
@@ -122,11 +124,15 @@ __launch_bounds__(MmaSchedule<TileColumns, kBlockK>::kThreads, 2) void fp8_mma_l
             for (int item = tid; item < kChunks; item += kThreads) {
                 const int local_row = item / (kBlockK / 16);
                 const int chunk     = item - local_row * (kBlockK / 16);
-                common::cp_async<16, Cache::cg>(
-                    &mainloop.codes[local_row][chunk * 16],
-                    weight_codes +
-                        static_cast<std::int64_t>(row_begin + local_row) * kLinearTopKHidden +
-                        k_begin + chunk * 16);
+                const auto offset =
+                    packed_layout
+                        ? common::volta_qpn_fragment(row_begin + local_row, k_begin / 16 + chunk,
+                                                     kLinearTopKHidden) *
+                              16
+                        : static_cast<std::int64_t>(row_begin + local_row) * kLinearTopKHidden +
+                              k_begin + chunk * 16;
+                common::cp_async<16, Cache::cg>(&mainloop.codes[local_row][chunk * 16],
+                                                weight_codes + offset);
             }
         };
 
@@ -164,8 +170,8 @@ __launch_bounds__(MmaSchedule<TileColumns, kBlockK>::kThreads, 2) void fp8_mma_l
                 common::cp_commit();
             }
 
-            const auto load_fragments = [&](int k_step, unsigned(&a)[4],
-                                            unsigned(&b)[kTokenMmas][2]) {
+            const auto load_fragments = [&](int k_step, unsigned (&a)[4],
+                                            unsigned (&b)[kTokenMmas][2]) {
                 const int weight_row = warp_row * 16 + a_rowoff;
                 const int weight_col = k_step * 16 + a_coloff;
                 common::ldmatrix_x4(

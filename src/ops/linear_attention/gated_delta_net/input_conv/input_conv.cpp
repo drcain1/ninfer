@@ -12,7 +12,7 @@ namespace input = detail::gdn_input;
 // Scratch is a scoped tail allocation. Live caller tensors may occupy an earlier part of
 // the same arena. The zero-scratch path never constructs an empty borrowed MemoryArena.
 template <class Validate, class Launch>
-void execute_with_scratch(const input::WeightOperands& weights, input::ProjectionPlan plan,
+void execute_with_scratch(const input::WeightOperands& weights, input::ConvPlan plan,
                           std::int32_t columns, bool materialized_snapshot, MemoryArena& workspace,
                           Validate&& validate, Launch&& launch) {
     auto scope       = workspace.scope();
@@ -62,7 +62,7 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const ProjectionWeights& weig
                                                 &out.value,
                                                 &out.z};
     execute_with_scratch(
-        operands, plan.projection, batch.columns(), plan.materialized(), workspace,
+        operands, plan, batch.columns(), plan.materialized(), workspace,
         [&](MemorySpan scratch) { input::validate_storage(operands, tensors, execution, scratch); },
         [&](const input::Scratch& scratch) {
             input::launch_snapshot(x, operands, conv_weight, state.source, destination, valid, out,
@@ -104,7 +104,7 @@ void gdn_input_proj_conv_update(const Tensor& x, const ProjectionWeights& weight
                                                &out.value,
                                                &out.z};
     execute_with_scratch(
-        operands, plan.projection, batch.columns(), plan.materialized(), workspace,
+        operands, plan, batch.columns(), plan.materialized(), workspace,
         [&](MemorySpan scratch) {
             input::validate_storage(operands, tensors, execution, scratch,
                                     &source.records.byte_offsets,
@@ -142,7 +142,7 @@ void gdn_input_proj_conv_record(const Tensor& x, const ProjectionWeights& weight
                                                &valid,   &record,      &out.query,
                                                &out.key, &out.value,   &out.z};
     execute_with_scratch(
-        operands, plan.projection, batch.columns(), false, workspace,
+        operands, plan, batch.columns(), false, workspace,
         [&](MemorySpan scratch) { input::validate_storage(operands, tensors, execution, scratch); },
         [&](const input::Scratch& scratch) {
             input::launch_record(x, operands, conv_weight, state, valid, out, record, batch, plan,

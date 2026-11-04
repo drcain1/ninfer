@@ -1,0 +1,3 @@
+NVIDIA CUTLASS v4.4.2 (da5e086dab31d63815acafdac9a9c5893b1c69e2)
+https://github.com/NVIDIA/cutlass
+Headers only; used by the sm_70 implementation.

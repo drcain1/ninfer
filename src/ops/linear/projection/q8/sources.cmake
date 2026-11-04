@@ -21,3 +21,7 @@ target_sources(ninfer_ops PRIVATE
 )
 
 include("${CMAKE_CURRENT_LIST_DIR}/${NINFER_TARGET}/sources.cmake")
+
+if(NINFER_TARGET STREQUAL "v100")
+  target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/v100/small.cu")
+endif()

@@ -5,9 +5,10 @@ namespace ninfer::test::causal_attention {
 std::vector<double> ideal_attention(const std::vector<float>& q, const HostCache& cache,
                                     const std::vector<std::int32_t>& positions) {
     const Geometry& geometry = cache.geometry;
-    const int tokens = positions.size(), visible = positions.back() + 1;
-    const bool rotate_q = cache.storage != KvCacheStorage::BFloat16;
-    const bool rotate_v = cache.storage == KvCacheStorage::Nvfp4Group16 ||
+    const int tokens         = positions.size(),
+              visible        = *std::max_element(positions.begin(), positions.end()) + 1;
+    const bool rotate_q      = cache.storage != KvCacheStorage::BFloat16;
+    const bool rotate_v      = cache.storage == KvCacheStorage::Nvfp4Group16 ||
                           cache.storage == KvCacheStorage::Fp8KeyNvfp4Value;
     std::vector<double> query(q.begin(), q.end()), output(q.size());
     if (rotate_q)

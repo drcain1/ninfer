@@ -24,6 +24,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/ple/tests.cmake")
 if(NINFER_TARGET STREQUAL "v100")
   ninfer_add_test(volta_primitives_test
     SOURCES "${CMAKE_CURRENT_LIST_DIR}/common/test_volta_primitives.cu"
-    LIBRARIES CUDA::cudart)
+    LIBRARIES ninfer_ops ninfer_core CUDA::cudart)
   set_tests_properties(volta_primitives_test PROPERTIES LABELS "ops")
 endif()

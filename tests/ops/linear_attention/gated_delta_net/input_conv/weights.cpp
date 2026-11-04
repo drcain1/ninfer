@@ -42,7 +42,8 @@ const char* policy_name(ops::LinearPolicy p) {
     throw std::logic_error("unknown policy");
 }
 
-Weights::Weights(Profile p, bool record) : profile(p), first(make_first(p, record)) {
+Weights::Weights(Profile p, bool record)
+    : profile(p), first(make_first(p, record), p.volta_packed) {
     if (p.format == QType::Q4_G64_FP16)
         second.emplace(quantized_weight::make_patterned_weight(
             QType::Q5_G64_FP16, 2 * p.value_rows(), p.hidden, record ? 1403 : 619));

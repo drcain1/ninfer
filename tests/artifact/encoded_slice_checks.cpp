@@ -5,6 +5,7 @@
 
 #include <bit>
 #include <cstring>
+#include <cuda_runtime.h>
 
 namespace ninfer::test {
 namespace {
@@ -276,9 +277,89 @@ void assembly_and_padding(std::optional<CudaExecutionView> execution) {
         }
     }
 }
+
+void volta_layout(std::optional<CudaExecutionView> execution) {
+    for (const bool nv : {false, true}) {
+        Fixture f;
+        const Shape shape{128, 256};
+        const auto format          = nv ? QType::NVFP4 : QType::FP8_E4M3FN_ROW_BF16;
+        const auto g               = weight_geometry(format, QuantLayout::VoltaQpn, shape);
+        const std::uint64_t codes  = 128 * 256 / (nv ? 2 : 1);
+        const std::uint64_t scales = nv ? 128 * 16 : 128 * 2;
+        require(g.code_bytes == codes && g.scale_offset == codes && g.scale_bytes == scales &&
+                    g.bytes == codes + scales + (nv ? 4 : 0),
+                "Volta packed planes changed payload extent");
+        f.payload.resize(g.bytes);
+        for (std::size_t i = 0; i < f.payload.size(); ++i)
+            f.payload[i] = std::byte((i * 31 + i / 29) % 256);
+        if (nv) put_word(f.payload, g.divisor_offset, std::bit_cast<std::uint32_t>(2.5F), 4);
+        f.root["components"] = {{"text", {{"config", Json::object()}}}};
+        f.root["objects"]    = Json::array({{{"id", "source"},
+                                             {"kind", "tensor"},
+                                             {"shape", shape},
+                                             {"format", nv ? "nvfp4" : "fp8_e4m3fn_row_bf16"},
+                                             {"layout", "volta_qpn_v1"},
+                                             {"offset", 0},
+                                             {"bytes", g.bytes}}});
+        f.root["bindings"]   = {{"source", {{"object", "source"}}}};
+        f.root["uses"]       = Json::array();
+        f.root["files"] =
+            Json::array({{{"path", nullptr}, {"payload_bytes", 1025}},
+                         {{"path", "second.bin"}, {"payload_bytes", g.bytes - 1025}}});
+        f.write();
+        Reader reader(f.entry);
+        const auto object = reader.find("source");
+        std::vector<TensorRequest> requests{{whole_tensor(reader, object), Device::cpu()}};
+        if (execution) requests.push_back({whole_tensor(reader, object), execution->device()});
+        auto plan          = plan_materialization(reader, requests);
+        const auto storage = plan.requests[0];
+        auto backing       = materialize(reader, std::move(plan), execution);
+        for (const auto& request : requests) {
+            const auto& parent = backing.parent(storage, request.device);
+            WeightView view{shape,
+                            {{&parent, 0, g.elements / 2}, {&parent, g.elements / 2, g.elements}}};
+            const auto weight = native_weight(view, 3.0F);
+            require(weight.layout == QuantLayout::VoltaQpn && weight.qdata == parent.data &&
+                        weight.scales == parent.data + codes && weight.n == 128 && weight.k == 256,
+                    "native Volta weight lost its physical layout");
+            require(!nv ||
+                        (weight.weight_scale_divisor == 2.5F && weight.input_scale_divisor == 3.0F),
+                    "Volta NVFP4 divisor changed");
+            rejects<std::invalid_argument>(
+                [&] { (void)native_weight(WeightView{{64, 256}, {{&parent, 0, g.elements / 2}}}); },
+                "partial Volta native matrix accepted");
+            rejects<std::invalid_argument>([&] { (void)weight_row_planes(view.parts[0]); },
+                                           "packed fragment exposed as contiguous row");
+        }
+        const auto& host = backing.parent(storage, Device::cpu());
+        require(std::memcmp(host.data, f.payload.data(), g.bytes) == 0,
+                "Volta materialization modified encoded words");
+        if (execution) {
+            std::vector<std::byte> copied(g.bytes);
+            CUDA_CHECK(cudaMemcpy(copied.data(), backing.parent(storage, execution->device()).data,
+                                  g.bytes, cudaMemcpyDeviceToHost));
+            require(copied == f.payload, "Volta GPU materialization changed encoded words");
+        }
+        for (std::uint64_t row = 0; row < 128; ++row)
+            for (std::uint64_t group = 0; group < (nv ? 16U : 1U); ++group) {
+                const auto lane   = (row & 3) + ((row >> 3) & 3) * 4 + ((row >> 2) & 1) * 16;
+                const auto offset = nv ? ((row / 32 * 16 + group) * 32 + lane) : row * 2;
+                require(weight_scale_offset(g, row, group) == codes + offset,
+                        "Volta scale coordinate differs from physical fragment");
+            }
+        const std::array slice{MatrixSlice{object, 0, 0, 64, 256}};
+        rejects([&] { (void)slice_tensor(reader, Shape{64, 256}, slice); },
+                "packed layout silently accepted an unsupported assembly");
+    }
+    rejects<std::invalid_argument>(
+        [] { (void)weight_geometry(QType::NVFP4, QuantLayout::VoltaQpn, Shape{127, 256}); },
+        "unaligned Volta matrix accepted");
+}
+
 } // namespace
 
 void encoded_slice_checks(std::optional<CudaExecutionView> execution) {
+    volta_layout(execution);
     assembly_and_padding(execution);
     expert_shards(true, execution);
     expert_shards(false, execution);

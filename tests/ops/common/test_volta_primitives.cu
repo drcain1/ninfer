@@ -1,5 +1,6 @@
 #include "ops/common/cuda/mma.cuh"
 #include "ops/linear/kernels/volta/tiled.cuh"
+#include "ops/linear/kernels/volta/prepared.h"
 #include "core/pdl.cuh"
 #include "ops/common/numeric/convert.cuh"
 #include "ops/common/cuda/pipeline.cuh"
@@ -377,10 +378,11 @@ void verify_dependencies(unsigned* values, float* output) {
 
 // Rows select either a large or tiny input coordinate. Each output is checked
 // exactly, so a large reference norm cannot hide lost small BF16 values.
-template <bool Nvfp4, bool Tiled, int Tiles = 2>
+template <bool Nvfp4, bool Tiled, int Tiles = 2, int Tokens = 33, bool Prepared = false,
+          bool Packed = false>
 void verify_volta_activation_range() {
     using namespace ninfer::ops::detail;
-    constexpr int n = 128, k = 64, tokens = 33;
+    constexpr int n = 128, k = Prepared ? 256 : 64, tokens = Tokens;
     std::vector<__nv_bfloat16> input(k * tokens), output(n * tokens);
     std::vector<unsigned char> codes(n * k / (Nvfp4 ? 2 : 1), 0);
     std::vector<unsigned char> nv_scales(n * k / 16, 56); // E4M3 1
@@ -391,6 +393,23 @@ void verify_volta_activation_range() {
             codes[row * k / 2 + column / 2] = 2u << ((column % 2) * 4);
         else
             codes[row * k + column] = 56; // E4M3 1
+    }
+    if constexpr (Packed) {
+        auto original = codes;
+        std::fill(codes.begin(), codes.end(), 0);
+        for (int row = 0; row < n; ++row)
+            for (int col = 0; col < k; ++col) {
+                const int lane   = row % 32 / 8 * 4 + row % 4 + row % 8 / 4 * 16;
+                const auto group = (std::size_t(row / 32) * (k / 16) + col / 16) * 32 + lane;
+                if constexpr (Nvfp4) {
+                    const int c      = col % 8;
+                    const int nibble = (col % 16 / 8) * 8 + (c % 2) * 4 + c / 2;
+                    codes[group * 8 + nibble / 2] |=
+                        ((original[std::size_t(row) * k / 2 + col / 2] >> ((col % 2) * 4)) & 15)
+                        << ((nibble % 2) * 4);
+                } else
+                    codes[group * 16 + col % 16] = original[std::size_t(row) * k + col];
+            }
     }
     __nv_bfloat16 *x = nullptr, *y = nullptr;
     unsigned char *weights = nullptr, *scales = nullptr;
@@ -404,7 +423,32 @@ void verify_volta_activation_range() {
                      Nvfp4 ? static_cast<const void*>(nv_scales.data())
                            : static_cast<const void*>(fp_scales.data()),
                      scale_bytes, cudaMemcpyHostToDevice));
+    VoltaLinearScratch scratch;
+    if constexpr (Prepared) {
+        check(cudaMalloc(&scratch.activations, k * tokens * 2));
+        check(cudaMalloc(&scratch.metadata, tokens * kVoltaActivationTileBytes));
+        if constexpr (tokens >= 128) {
+            check(cudaMalloc(&scratch.weights, n * k * 2));
+            check(cudaMalloc(&scratch.results, n * tokens * 4));
+        }
+    }
     const auto launch = [&] {
+        if constexpr (Prepared) {
+            const auto device = ninfer::Device::cuda(0);
+            ninfer::Weight weight;
+            weight.device = device;
+            weight.n      = n;
+            weight.k      = k;
+            weight.qtype  = Nvfp4 ? ninfer::QType::NVFP4 : ninfer::QType::FP8_E4M3FN_ROW_BF16;
+            if constexpr (Packed) weight.layout = ninfer::QuantLayout::VoltaQpn;
+            weight.qdata                = weights;
+            weight.scales               = scales;
+            weight.weight_scale_divisor = 1.f;
+            const ninfer::Tensor input_tensor{x, device, ninfer::DType::BF16, {k, tokens}};
+            const ninfer::Tensor output_tensor{y, device, ninfer::DType::BF16, {n, tokens}};
+            volta_linear_projection(input_tensor, weight, {&output_tensor, 1}, scratch, nullptr);
+            return;
+        }
         const auto invoke = [&](auto operands) {
             const LinearBf16Output destination{y, n};
             if constexpr (Tiled)
@@ -424,10 +468,15 @@ void verify_volta_activation_range() {
     };
     // Input mutation exercises exact admission, sparse correction and the
     // dense-residual FP32 fallback using the actual production kernels.
-    for (int mode = 0; mode < 8; ++mode) {
+    for (int mode = 0; mode < 9; ++mode) {
         std::fill(input.begin(), input.end(), __float2bfloat16(0.f));
         for (int token = 0; token < tokens; ++token) {
-            if (mode == 2) {
+            if (mode == 8) {
+                // More than 64 unrepresentable values within a single token must
+                // still preserve the independently selected tiny component.
+                for (int col = 0; col < k; ++col)
+                    input[token * k + col] = __float2bfloat16(col == 0 ? 1.e15f : 1.e-30f);
+            } else if (mode == 2) {
                 for (int col = 0; col < k; ++col)
                     input[token * k + col] = __float2bfloat16(token % 2 ? 1.e-30f : 1.e15f);
             } else if (mode < 2) {
@@ -460,6 +509,14 @@ void verify_volta_activation_range() {
     check(cudaFree(y));
     check(cudaFree(weights));
     check(cudaFree(scales));
+    if constexpr (Prepared) {
+        check(cudaFree(scratch.activations));
+        check(cudaFree(scratch.metadata));
+        if constexpr (tokens >= 128) {
+            check(cudaFree(scratch.weights));
+            check(cudaFree(scratch.results));
+        }
+    }
 }
 
 int main() {
@@ -486,6 +543,14 @@ int main() {
         verify_volta_activation_range<true, false>();
         verify_volta_activation_range<true, false, 1>();
         verify_volta_activation_range<true, true>();
+        verify_volta_activation_range<false, false, 2, 5, true>();
+        verify_volta_activation_range<true, false, 2, 5, true>();
+        verify_volta_activation_range<false, false, 2, 129, true>();
+        verify_volta_activation_range<true, false, 2, 129, true>();
+        verify_volta_activation_range<false, false, 2, 5, true, true>();
+        verify_volta_activation_range<true, false, 2, 5, true, true>();
+        verify_volta_activation_range<false, false, 2, 129, true, true>();
+        verify_volta_activation_range<true, false, 2, 129, true, true>();
         verify<0>(in, out);
         verify<0>(in, out, true);
         verify<1>(in, out);

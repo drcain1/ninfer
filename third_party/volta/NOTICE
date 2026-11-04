@@ -1,0 +1,8 @@
+Volta kernels adapted from https://github.com/geoffwatts/ninfer-v100
+Revision b37d0dd3e1163b9d802d8bccfa89918bf68d793e.
+Apache License 2.0 (LICENSE). Volta MMA fragment addressing originates in
+llama.cpp, Copyright (c) 2023-2024 The ggml authors, MIT License (LICENSE.llama).
+
+Flash attention and lossless artifact-packing adaptations imported from local
+Infernix revision
+501f2a9ac788cff96d6f34c9e5ab68c349398576, including FP32 PV accumulation.

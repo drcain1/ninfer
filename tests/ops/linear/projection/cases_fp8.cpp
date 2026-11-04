@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "core/weight.h"
 #include "cuda_fixture.h"
 #include "core/buffer.h"
@@ -154,7 +155,9 @@ void run_fp8_a16(Suite& suite) {
                   Tensor input(device_input.span(), DType::BF16, {5120, 1});
                   Tensor output(device_output.span(), DType::BF16, {14336, 1});
                   ninfer::DeviceBuffer workspace_storage(
-                      ninfer::test::cuda_environment().context.device(), 256);
+                      ninfer::test::cuda_environment().context.device(),
+                      ops::linear_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16, 14336, 5120,
+                                                           ops::LinearPolicy::A16Only, 1, 1));
                   MemoryArena workspace(workspace_storage.span());
                   const auto invoke = [&](const Weight& candidate) {
                       ops::linear(input, candidate, output, ops::LinearPolicy::A16Only, workspace,
@@ -367,6 +370,19 @@ void run_fp8_a8(Suite& suite) {
 } // namespace
 
 void ninfer::test::linear::add_fp8_cases(Suite& suite) {
+#if NINFER_TARGET_V100
+    const std::array packed_calls{Invocation{1},
+                                  Invocation{5, CallForm::Policy, ops::LinearPolicy::A16Only, true},
+                                  Invocation{17}, Invocation{129}, Invocation{2048}};
+    for (auto fmt : {QType::FP8_E4M3FN_ROW_BF16, QType::NVFP4})
+        for (auto nk : {std::pair{16384, 5120}, std::pair{5120, 17408}}) {
+            ShapeCase c{nk.first, nk.second, 9101U, Comparison::Sampled, true, packed_calls};
+            c.volta_packed = true;
+            add_shape(suite, fmt, ActivationRecipe::Hashed,
+                      fmt == QType::NVFP4 ? make_nvfp4_weight : make_fp8_weight, c);
+        }
+#endif
+
     run_fp8_a16(suite);
     run_fp8_wide_activation(suite);
     run_fp8_a8(suite);

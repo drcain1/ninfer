@@ -1,3 +1,5 @@
+#include "core/platform.h"
+#include "core/platform.h"
 #include "core/weight.h"
 #include "ops/linear/swiglu/runner.h"
 #include "ops/linear_common.h"
@@ -24,6 +26,17 @@ ninfer::test::quantized_weight::PackedWeight make_negative_gate_weight() {
 } // namespace
 
 void ninfer::test::linear_swiglu::add_fp8_cases(Suite& suite) {
+#if NINFER_TARGET_V100
+    for (auto fmt : {QType::FP8_E4M3FN_ROW_BF16, QType::NVFP4})
+        add_profile(suite,
+                    {fmt, 34816, 5120, 17408, 9181U,
+                     fmt == QType::NVFP4 ? ops::LinearPolicy::AllowA4 : ops::LinearPolicy::A16Only,
+                     0.f, true},
+                    std::array{1, 5, 17, 129, 2048}, std::array{5});
+    add_profile(suite,
+                {QType::NVFP4, 34816, 5120, 17408, 9183U, ops::LinearPolicy::A16Only, 0.f, true},
+                std::array{1, 5, 16}, std::array{5});
+#endif
 
     constexpr std::array kA16Cases{1,  2,  4,  5,  8,  9,  16,  17,  24,  25,
                                    32, 33, 64, 65, 96, 97, 128, 129, 1024};

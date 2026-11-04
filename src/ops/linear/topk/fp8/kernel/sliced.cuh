@@ -1,4 +1,5 @@
 #pragma once
+#include "ops/common/quant/volta_qpn.cuh"
 #include "ops/common/quant/fp8.cuh"
 #include "ops/common/cuda/pipeline.cuh"
 #include "ops/common/cuda/mma.cuh"
@@ -23,7 +24,8 @@ __global__
 __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_grouped_ksplit_topk_kernel(
     const __nv_bfloat16* __restrict__ hidden, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, std::int32_t valid_rows,
-    std::uint64_t* __restrict__ partial_keys, std::int32_t producer_groups, int columns) {
+    std::uint64_t* __restrict__ partial_keys, std::int32_t producer_groups, int columns,
+    bool packed_layout) {
     constexpr int kHidden    = Fp8N248320K5120::kInputRows;
     constexpr int kTileK     = Schedule::kTileKPerWarp;
     constexpr int kWarps     = Schedule::kKWarps;
@@ -87,10 +89,12 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_groupe
                 const int row       = row_begin + local_row;
                 for (int chunk = lane; chunk < kBlockK / 16; chunk += 32) {
                     const int swizzled_chunk = chunk ^ (local_row & 7);
+                    const auto offset =
+                        packed_layout
+                            ? common::volta_qpn_fragment(row, group_k0 / 16 + chunk, kHidden) * 16
+                            : static_cast<std::int64_t>(row) * kHidden + group_k0 + chunk * 16;
                     common::cp_async<16, Cache::cg>(&code_shared[local_row][swizzled_chunk * 16],
-                                                    weight_codes +
-                                                        static_cast<std::int64_t>(row) * kHidden +
-                                                        group_k0 + chunk * 16);
+                                                    weight_codes + offset);
                 }
             }
         };

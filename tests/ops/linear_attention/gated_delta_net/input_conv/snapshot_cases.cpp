@@ -17,6 +17,18 @@ Weight capacity_weight(QType format, std::int32_t rows, std::int32_t columns) {
 std::vector<SnapshotCase> cases(Profile p) {
     using Policy = ops::LinearPolicy;
     std::vector<SnapshotCase> result;
+    if (p.volta_packed) {
+        const auto policy = p.format == QType::NVFP4 ? Policy::AllowA4 : Policy::A16Only;
+        for (int t : {1, 5, 17, 129, 2048})
+            result.push_back({.width = t, .policy = policy, .graph = t == 5});
+        result.push_back({.width     = 5,
+                          .policy    = Policy::A16Only,
+                          .graph     = true,
+                          .batch     = 2,
+                          .valid     = {5, 3},
+                          .conv_seed = 9191});
+        return result;
+    }
     const auto batch = [&](int width, int count, std::vector<int> valid, unsigned seed,
                            Policy policy = Policy::A16Only) {
         result.push_back({.width     = width,
@@ -164,6 +176,26 @@ int snapshot_capacity_contract() {
             }
         }
 #endif
+#if NINFER_TARGET_V100
+    // Prepared projections use caller-owned scratch even for short windows.
+    // Check the public interval bound across small and GEMM-sized calls.
+    for (auto policy : {ops::LinearPolicy::A16Only, ops::LinearPolicy::AllowA4}) {
+        const ops::SingleProjectionWeight weights{capacity_weight(QType::NVFP4, 16384, 5120),
+                                                  policy};
+        for (int batch : {1, 2, 8}) {
+            std::size_t peak = 0;
+            for (int width = 1; width <= (batch == 1 ? 257 : 16); ++width) {
+                peak = std::max(peak, ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+                                          weights, batch, width, width));
+                if (ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(weights, batch, 1,
+                                                                               width) != peak) {
+                    std::cerr << "NVFP4 snapshot interval misses an execution capacity\n";
+                    ++failures;
+                }
+            }
+        }
+    }
+#else
     const std::size_t nvfp4_a4_4 = ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
         ops::SingleProjectionWeight{capacity_weight(QType::NVFP4, 16384, 5120),
                                     ops::LinearPolicy::AllowA4},
@@ -184,6 +216,7 @@ int snapshot_capacity_contract() {
         std::cerr << "NVFP4 snapshot interval did not preserve its A16/A4 route boundary\n";
         ++failures;
     }
+#endif
     const auto fp8_snapshot_capacity = [](ops::LinearPolicy policy, std::int32_t batch,
                                           std::int32_t min_width, std::int32_t max_width) {
         return ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
@@ -212,6 +245,10 @@ int main(int argc, char** argv) {
     OpSuite suite;
     suite.add("gdn_input_snapshot/capacity", snapshot_capacity_contract);
     std::vector<Profile> selected_profiles(std::begin(profiles), std::end(profiles));
+#if NINFER_TARGET_V100
+    selected_profiles.push_back({QType::FP8_E4M3FN_ROW_BF16, 5120, "fp8-volta", 2048, true});
+    selected_profiles.push_back({QType::NVFP4, 5120, "nvfp4-volta", 2048, true});
+#endif
 #if NINFER_TARGET_SPARK
     selected_profiles.push_back(local_profile);
 #endif

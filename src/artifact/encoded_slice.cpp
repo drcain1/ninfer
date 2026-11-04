@@ -23,8 +23,10 @@ EncodedTensor slice_tensor(const Reader& reader, std::span<const std::uint64_t> 
                            std::span<const MatrixSlice> slices) {
     if (slices.empty()) throw ArtifactError("encoded selection has no source slices");
     const auto& source = reader.geometry(slices.front().object);
-    auto format        = source.format;
-    auto layout        = source.layout;
+    if (source.layout == QuantLayout::VoltaQpn)
+        throw ArtifactError("Volta fragments require complete source matrices");
+    auto format = source.format;
+    auto layout = source.layout;
     if (nvfp4(layout))
         layout = shape.size() == 3 ? QuantLayout::BatchedBlockScaleK16M128x4
                                    : QuantLayout::BlockScaleK16M128x4;

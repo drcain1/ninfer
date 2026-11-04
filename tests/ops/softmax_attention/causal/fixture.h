@@ -112,9 +112,12 @@ struct AttentionCase {
     std::int32_t base;
     std::uint32_t envelope_max;
     std::uint32_t seed;
-    bool zero_q        = false;
-    bool graph_replay  = false;
-    float qk_amplitude = 0.25f;
+    bool zero_q                  = false;
+    bool graph_replay            = false;
+    float qk_amplitude           = 0.25f;
+    float append_value_amplitude = 1.f;
+    float query_gain             = 1.f;
+    bool reverse_positions       = false;
 };
 
 enum class MappingPattern { Identity, Offset, Fragmented };

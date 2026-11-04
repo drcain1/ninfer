@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "fixture.h"
 #include "kv_cache_storage.h"
 
@@ -236,6 +237,47 @@ void add_quantized_causal_cases(OpSuite& suite, KvCacheStorage storage) {
         add_batch_case(
             suite, geometry, storage,
             {16, {17, 1025, 64}, {0, 7, 16}, {2, 0, 1}, MappingPattern::Fragmented, 610u, true});
+        if (storage == KvCacheStorage::Int8Group64) {
+#if NINFER_TARGET_V100
+            for (int width : {128, 129, 255, 256}) {
+                const std::array<int, 3> edge_queries{0, width / 2, width - 1};
+                add_append_case(suite, geometry, storage,
+                                {width, 17, 2048, static_cast<unsigned>(9400 + width), false, true},
+                                MappingPattern::Fragmented, edge_queries);
+            }
+            const std::array<int, 7> unordered_queries{0, 31, 32, 255, 256, 511, 512};
+            add_cached_case(suite, geometry, storage,
+                            {513, 0, 8192, 9357u, false, true, .25f, 1.f, 1.f, true},
+                            MappingPattern::Fragmented, unordered_queries);
+            const std::array<int, 4> range_queries{0, 1, 128, 256};
+            add_append_case(suite, geometry, storage, {257, 0, 512, 9351u, false, true, 131072.f},
+                            MappingPattern::Fragmented, range_queries);
+            add_append_case(suite, geometry, storage,
+                            {257, 0, 512, 9353u, true, true, .25f, 262144.f},
+                            MappingPattern::Offset, range_queries);
+            add_append_case(suite, geometry, storage,
+                            {257, 0, 512, 9355u, false, true, .25f, 1.f, 0x1p100f},
+                            MappingPattern::Fragmented, range_queries);
+#endif
+            // Production prefill, bounded query staging, and masked cache reads.
+            const std::array<int, 7> large_queries{0, 255, 256, 511, 512, 1023, 2047};
+            add_append_case(suite, geometry, storage, {2048, 8192, 10240, 1401u},
+                            MappingPattern::Fragmented, large_queries);
+            const std::array<int, 4> long_queries{0, 255, 256, 512};
+            add_cached_case(suite, geometry, storage, {513, 32768, 65536, 1402u},
+                            MappingPattern::Offset, long_queries);
+            for (int valid : {0, 1, 257, 512})
+                add_batch_case(suite, geometry, storage,
+                               {513,
+                                {63},
+                                {valid},
+                                {0},
+                                MappingPattern::Fragmented,
+                                static_cast<unsigned>(1410 + valid),
+                                true,
+                                {{63}, {1025}, {17}}},
+                               2048);
+        }
         const std::array<int, 4> queries{0, 63, 64, 1023};
         add_append_case(suite, geometry, storage, {1024, 8192, 9216, 611u},
                         MappingPattern::Fragmented, queries);

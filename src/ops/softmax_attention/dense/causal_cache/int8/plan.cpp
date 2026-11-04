@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/softmax_attention/dense/causal_cache/volta/flash.h"
+#endif
 #include "ops/softmax_attention/dense/causal_cache/int8/plan.h"
 #include "ops/softmax_attention/kernels/causal/operands.h"
 #include <algorithm>
@@ -14,7 +18,7 @@ inline constexpr bool causal_query_tiles_underfill_sms(int independent_tiles,
     return filled < static_cast<std::int64_t>(multiprocessor_count) * 9 / 10;
 }
 
-constexpr int kGroupedPrefillMaxWidth = 256;
+constexpr int kGroupedPrefillMaxWidth = NINFER_TARGET_V100 ? 128 : 256;
 } // namespace
 
 Int8KvCausalPlan select_int8_kv_causal_plan(int heads, int width, int batch,
@@ -58,6 +62,12 @@ std::size_t int8_kv_workspace_bytes(int heads, int batch, int min_width, int max
         (void)allocate_causal_partials(layout, heads, width, splits, batch);
         maximum = std::max(maximum, layout.peak_bytes(1));
     }
+#if NINFER_TARGET_V100
+    if (max_width > kGroupedPrefillMaxWidth)
+        maximum = std::max(maximum,
+                           volta_flash_workspace_bytes(heads, max_width, envelope.max_visible_keys,
+                                                       multiprocessor_count));
+#endif
     return maximum;
 }
 
