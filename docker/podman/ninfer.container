@@ -1,0 +1,55 @@
+[Unit]
+Description=NInfer V100 inference server
+StartLimitIntervalSec=0
+RequiresMountsFor=/mnt/models/ninfer
+Conflicts=infernix.service
+After=infernix.service
+
+[Container]
+Image=localhost/ninfer-v100:sm70-bc3f1be2
+Pull=never
+ContainerName=ninfer-v100
+Entrypoint=/bin/bash
+Exec=-c "exec /opt/ninfer/entrypoint.sh 2>&1"
+PublishPort=8080:8080
+AddDevice=/dev/nvidia0
+AddDevice=/dev/nvidiactl
+AddDevice=/dev/nvidia-uvm
+SecurityLabelDisable=true
+Volume=/mnt/models/ninfer:/models:rw
+# Mount the launcher so cache options do not depend on the older copy in the image.
+Volume=/home/dr_cain/projects/ninfer/entrypoint.sh:/opt/ninfer/entrypoint.sh:ro
+Volume=/home/dr_cain/projects/ninfer/logs:/logs:rw
+Volume=/lib64/libcuda.so.1:/usr/local/nvidia/lib64/libcuda.so.1:ro
+Volume=/lib64/libnvidia-ptxjitcompiler.so.1:/usr/local/nvidia/lib64/libnvidia-ptxjitcompiler.so.1:ro
+Volume=/lib64/libnvidia-nvvm.so.4:/usr/local/nvidia/lib64/libnvidia-nvvm.so.4:ro
+Volume=/lib64/libnvidia-ml.so.1:/usr/local/nvidia/lib64/libnvidia-ml.so.1:ro
+Environment=PORT=8080
+Environment=LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+Environment=MAX_CONTEXT=200000
+Environment=MODEL_ID=qwen3.8-27b
+Environment=MODEL_PATH=/models/Swift-1.5-Qwen3.8-27B-OrcaRouter-NVFP4-DFlash2.ninfer
+Environment=API_KEY=
+Environment=AUTO_DOWNLOAD=0
+Environment=MAX_CONCURRENCY=2
+Environment=KV_DTYPE=int8
+Environment=DEVICE_STATE_SLOTS=1
+Environment=HOST_STATE_SLOTS=32
+Environment=HOST_KV_MIB=4096
+Environment=MAX_PRIVATE_CONTINUATIONS=4
+Environment=MAX_SHARED_PREFIXES=0
+Environment=REQUEST_LOG_JSONL=/logs/requests.jsonl
+Environment=SPEC=mtp
+Environment=DRAFT_TOKENS=4
+Environment=VISION=1
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=300
+TimeoutStopSec=60
+ExecStartPre=/usr/bin/test -c /dev/nvidia0
+ExecStartPre=/usr/bin/test -c /dev/nvidia-uvm
+
+[Install]
+WantedBy=default.target

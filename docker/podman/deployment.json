@@ -1,0 +1,12 @@
+{
+  "deployed_at_utc": "2026-11-04T01:06:38.058971+00:00",
+  "service": "ninfer.service",
+  "image": "localhost/ninfer-v100:sm70-bc3f1be2",
+  "image_id": "010e6f5d6a69d1ccb41c40fe12e44713702570aa20236d12e98b1537d418c0ae",
+  "source_branch": "backport/upstream-reliability-20261103",
+  "source_commit": "bc3f1be27817d4fdb9db8f5c88ffc43555569163",
+  "binary_sha256": "01e76c5a4ca41cf14fe9f8c220b1cd1d9baa4c1dc1a1a286b71a643bb0379b3f",
+  "previous_image": "localhost/ninfer-v100:sm70-v2",
+  "configuration_backup": "/home/dr_cain/projects/ninfer/deployments/reliability-20261104/ninfer.container.previous",
+  "validation": "/home/dr_cain/projects/ninfer/deployments/reliability-20261104/validation.json"
+}

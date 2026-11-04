@@ -1,0 +1,78 @@
+NInfer V100 old/new benchmark and regression report — 2026-11-04
+
+Outcome: serving performance was essentially unchanged in these workloads.
+No functional regression was found in the tested cases.
+
+Compared binaries:
+  Old: localhost/ninfer-v100:sm70-v2 (the deployed original)
+  New: localhost/ninfer-v100:sm70-bc3f1be2 (backport replacement)
+  This does not benchmark the incomplete upstream V100 port branch.
+
+Conditions:
+  Tesla V100 PCIe 32GB; 170W power limit; normal dynamic GPU clocks.
+  Same Swift-1.5-Qwen3.8-27B-OrcaRouter-NVFP4-DFlash2.ninfer artifact.
+  200000 context limit, 2048 prefill chunk, INT8 KV, auto KV capacity 239680.
+  Concurrency 2, MTP with 4 draft tokens, draft head and vision enabled.
+  Host KV 4096 MiB; host state slots 32; extra device state slots 1.
+  Private continuations 4; shared prefixes 0. Prefix caching enabled.
+  Requests use temperature 0 and seed 42; native non-thinking presence penalty 1.5.
+  Engine/environment/sampling startup records matched; only log paths differed.
+  Independent process runs in old/new/new/old order, each with a warmup request.
+  All timed prompt cache-hit counts were zero. Startup time is excluded.
+  SSE wall time and time to first text are client measurements; decode/prefill
+  rates are the server-reported timings, including its token-count conventions.
+
+Median results (old -> new; positive latency change means slower):
+  short_decode: [61] input tokens -> [256] output tokens; 6 samples/version
+    End-to-end: 4.949 -> 4.955 seconds (+0.12%)
+    First text: 424.9 -> 424.8 ms
+    Decode: 56.40 -> 56.32 tokens/sec
+    Prefill: 144.12 -> 144.10 tokens/sec
+    End-to-end range: old 4.772..4.998, new 4.787..4.997 seconds
+  medium_prefill: [2293] input tokens -> [256] output tokens; 4 samples/version
+    End-to-end: 7.304 -> 7.316 seconds (+0.17%)
+    First text: 2540.9 -> 2548.3 ms
+    Decode: 53.66 -> 53.62 tokens/sec
+    Prefill: 904.86 -> 902.25 tokens/sec
+    End-to-end range: old 7.126..7.467, new 7.151..7.473 seconds
+  long_prefill: [9169] input tokens -> [128] output tokens; 2 samples/version
+    End-to-end: 11.943 -> 11.935 seconds (-0.06%)
+    First text: 9782.3 -> 9773.9 ms
+    Decode: 58.78 -> 58.76 tokens/sec
+    Prefill: 938.26 -> 939.07 tokens/sec
+    End-to-end range: old 11.931..11.955, new 11.920..11.950 seconds
+  Two concurrent requests, 128 output tokens each; 4 pairs/version:
+    Aggregate throughput: 67.93 -> 67.83 tokens/sec (-0.14%)
+    Pair completion time: 3.769 -> 3.775 seconds
+
+Correctness and regression checks:
+  Replacement CTest: 18/18 targeted suites passed, with no skips.
+  Real-model HTTP checks: 16/16 passed on both old and new.
+  Covered arithmetic, JSON instructions, multi-turn history, thinking/accounting,
+  stream/nonstream parity, prefix reuse, stop strings, output limits, tool calls,
+  Responses storage/retrieval/deletion, Anthropic messages/token counting, a red
+  image fixture, malformed requests, unknown model, over-limit context rejection,
+  and recovery after disconnecting a streaming client.
+  Concurrent arithmetic: old 8/8, new 8/8.
+  Matched sequential benchmark outputs: 12/12 exactly identical.
+  Concurrent free-form outputs were not universally identical: the first pair
+  differed between old-a and old-d too. Old-d, new-b, and new-c produced the same
+  outputs for those pairs. This variation already occurs with the old binary;
+  its exact cause was not isolated. Concurrent correctness checks passed.
+  The replacement context error includes the 200000-token limit and a prepared
+  prompt lower bound of 200001 tokens; the old error omitted the prompt count.
+
+Interpretation and limits:
+  Median sequential and concurrent completion times differ by less than 0.2%.
+  These measurements do not establish a meaningful performance improvement or
+  regression. Sample counts are small, especially for the longest prompt.
+  Maximum timed input was 9169 tokens. The 200k boundary was tested for rejection,
+  not with a full 200k-token successful generation. Vision used one simple image.
+  This is functional regression evidence, not a proof of all numerical kernels
+  or a general model-quality evaluation.
+  The baseline binary source revision/compiler flags are not independently known;
+  results compare the actual deployed and replacement executables as requested.
+
+Artifacts: summary.json, samples.csv, metadata.json, per-phase JSON responses,
+per-request/server logs, regressions.log, and the Python/shell harness.
+Original deployment is restored after testing; candidate is not deployed.
