@@ -44,7 +44,9 @@ Int8KvCausalPlan select_int8_kv_causal_plan(int heads, int width, int batch,
             : sms;
     CausalKvPartition partition{1, causal_partition_target(budget, independent_tiles)};
     // Bound partial traffic by keeping enough KV work in each split.
-    partition.key_shift = (width == 1 ? 7 : 8) - (heads == 16 ? 1 : 0);
+    // Volta's emulated INT8 QK is latency-sensitive: keep short contexts spread
+    // across SMs instead of assigning 128/256 keys to a handful of CTAs.
+    partition.key_shift = NINFER_TARGET_V100 ? 6 : (width == 1 ? 7 : 8) - (heads == 16 ? 1 : 0);
     partition.capacity  = partition.active(envelope.max_visible_keys);
     return {family, heads, width, batch, envelope, partition};
 }

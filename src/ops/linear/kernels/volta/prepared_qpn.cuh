@@ -24,6 +24,13 @@ __global__ __launch_bounds__(Warps * 32,
         const int chunks                = p.k / Chunk;
         const int begin                 = warp * (chunks / Warps);
         const int end                   = warp == Warps - 1 ? chunks : begin + chunks / Warps;
+        // Unroll the packed decode loop where the extra live values fit without
+        // spills. Two-tile NVFP4 batches retain the smaller register footprint.
+        constexpr int Unroll = volta_packed_v<Operands> &&
+                                       (!volta_nvfp4_v<Operands> || Tiles == 1)
+                                   ? 4
+                                   : 1;
+#pragma unroll Unroll
         for (int chunk = begin; chunk < end; ++chunk) {
             uint4 codes[volta_nvfp4_v<Operands> ? 2 : 4];
             unsigned scales = 0;

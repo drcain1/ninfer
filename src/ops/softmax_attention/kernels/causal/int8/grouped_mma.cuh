@@ -8,6 +8,7 @@
 #include "ops/softmax_attention/kernels/causal/partition.h"
 #include "ops/softmax_attention/kernels/causal/epilogue.cuh"
 #include "ops/softmax_attention/kernels/softmax.cuh"
+#include "ops/softmax_attention/kernels/causal/int8/volta_pv.cuh"
 
 namespace ninfer::ops::detail {
 
@@ -267,12 +268,17 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     }
     __syncthreads();
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+    VoltaPvTile<RowTiles, Bc, PVNtPerWarp / 2> pv;
+#else
     float acc[PVNtPerWarp][4];
 #pragma unroll
     for (int n = 0; n < PVNtPerWarp; ++n) {
 #pragma unroll
         for (int i = 0; i < 4; ++i) { acc[n][i] = 0.0f; }
     }
+
+#endif
 
     float m0 = -CUDART_INF_F, m1 = -CUDART_INF_F;
     float l0 = 0.0f, l1 = 0.0f;
@@ -502,6 +508,9 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
             issue_kv_tile(next_k0, record_offset);
         }
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+        pv.accumulate(p_s, v_f16, alpha_s, warp, lane);
+#else
         const int consumer_tile     = warp % RowTiles;
         const int consumer_slice    = warp / RowTiles;
         const int consumer_row_base = consumer_tile * 16;
@@ -537,6 +546,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
                                 pf[3], vf[0], vf[1]);
             }
         }
+#endif
         if (has_next) { common::cp_wait<0>(); }
         __syncthreads();
     }
@@ -564,6 +574,10 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
         }
     }
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+    pv.template store<Geometry>(partial_acc, warp, lane, kv_head, tile_tokens,
+                                partial_begin, split, partial_width);
+#else
 #pragma unroll
     for (int n = 0; n < PVNtPerWarp; ++n) {
         const int consumer_tile     = warp % RowTiles;
@@ -589,6 +603,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
             causal_store_partial_pair(&partial_acc[dst], acc[n][2], acc[n][3]);
         }
     }
+#endif
 }
 
 } // namespace ninfer::ops::detail
