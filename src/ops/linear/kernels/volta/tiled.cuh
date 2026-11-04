@@ -11,13 +11,14 @@ __global__ __launch_bounds__(128, 4) void volta_tiled_kernel(Operands p, Output 
     __shared__ __align__(32) half xs[2][32][40];
     __shared__ __align__(32) half ws[2][32][40];
     __shared__ __align__(32) float result[32][32];
-    __shared__ unsigned maxima[4];
+    __shared__ unsigned maxima[8];
     __shared__ VoltaActivationResiduals residuals;
-    const int token0             = int(blockIdx.y) * 32;
-    const int tokens             = min(32, p.tokens - token0);
-    const auto* x                = p.x + std::int64_t(token0) * p.k;
-    const float activation_scale = volta_activation_scale(x, tokens * p.k, maxima);
-    if (volta_activation_residuals(x, tokens * p.k, activation_scale, residuals)) {
+    const int token0 = int(blockIdx.y) * 32;
+    const int tokens = min(32, p.tokens - token0);
+    const auto* x    = p.x + std::int64_t(token0) * p.k;
+    bool exact;
+    const float activation_scale = volta_activation_scale(x, tokens * p.k, maxima, exact);
+    if (volta_activation_residuals(x, tokens * p.k, activation_scale, residuals, exact)) {
         for (int e = threadIdx.x; e < 1024; e += 128) {
             const int row = volta_qpn_row<Paired>(e / 32, p.rows), token = e % 32;
             float value = 0;
@@ -72,11 +73,10 @@ __global__ __launch_bounds__(128, 4) void volta_tiled_kernel(Operands p, Output 
                 const uint2 codes = __ldg(reinterpret_cast<const uint2*>(
                     p.codes + std::int64_t(safe_row) * p.k + kbase + local_k));
 #pragma unroll
-                for (int j = 0; j < 8; ++j) {
-                    const unsigned word = j < 4 ? codes.x : codes.y;
-                    carry.wv[j] =
-                        __float2half_rn(common::volta::decode<common::volta::Format::E4m3>(
-                            (word >> ((j % 4) * 8)) & 255));
+                for (int j = 0; j < 4; ++j) {
+                    const half2 pair = volta_fp8_pair(codes.x >> (j * 8), codes.y >> (j * 8));
+                    carry.wv[j]      = __low2half(pair);
+                    carry.wv[j + 4]  = __high2half(pair);
                 }
             }
         };
@@ -111,7 +111,8 @@ __global__ __launch_bounds__(128, 4) void volta_tiled_kernel(Operands p, Output 
             const int row = volta_qpn_row<Paired>(e / 32, p.rows);
             if (row < p.rows)
                 result[e / 32][e % 32] =
-                    volta_correct(p, row, e % 32, result[e / 32][e % 32] / activation_scale,
+                    volta_correct(p, row, e % 32,
+                                  result[e / 32][e % 32] * volta_inverse_scale(activation_scale),
                                   residuals) *
                     volta_weight_factor(p, row);
         }
@@ -141,10 +142,12 @@ void launch_volta_tiled(Operands p, Output output, Epilogue epilogue, cudaStream
 } // namespace ninfer::ops::detail
 
 namespace ninfer::ops::detail {
-template <int SmallTiles, int MatrixThreshold, bool Paired = false, class Operands, class Output,
-          class Epilogue>
+template <int SmallTiles, int MatrixThreshold, bool Paired = false, int TinyTiles = SmallTiles,
+          class Operands, class Output, class Epilogue>
 void launch_volta_linear(Operands p, Output output, Epilogue epilogue, cudaStream_t stream) {
-    if (p.tokens < MatrixThreshold)
+    if (p.tokens <= 8)
+        launch_volta_qpn<TinyTiles, Paired>(p, output, epilogue, stream);
+    else if (p.tokens < MatrixThreshold)
         launch_volta_qpn<SmallTiles, Paired>(p, output, epilogue, stream);
     else
         launch_volta_tiled<Paired>(p, output, epilogue, stream);

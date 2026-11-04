@@ -185,6 +185,33 @@ __global__ void represented_values(float* values) {
     if (code < 16) values[256 + code] = volta::decode<volta::Format::E2m1>(code);
 }
 
+__global__ void packed_fp8_values(float2* values) {
+    const unsigned pair = blockIdx.x * blockDim.x + threadIdx.x;
+    values[pair] = __half22float2(ninfer::ops::detail::volta_fp8_pair(pair & 255, pair >> 8));
+}
+
+void verify_packed_fp8() {
+    constexpr int count = 256 * 256;
+    float2* output      = nullptr;
+    check(cudaMalloc(&output, count * sizeof(float2)));
+    packed_fp8_values<<<count / 256, 256>>>(output);
+    check(cudaGetLastError());
+    std::vector<float2> actual(count);
+    check(cudaMemcpy(actual.data(), output, count * sizeof(float2), cudaMemcpyDeviceToHost));
+    check(cudaFree(output));
+    for (unsigned pair = 0; pair < count; ++pair) {
+        for (int lane = 0; lane < 2; ++lane) {
+            const unsigned code = (pair >> (lane * 8)) & 255;
+            const float value   = lane ? actual[pair].y : actual[pair].x;
+            if ((code & 127) == 127) {
+                if (!std::isnan(value)) throw std::runtime_error("packed FP8 NaN mismatch");
+            } else if (value != fp8(code) || std::signbit(value) != bool(code & 128)) {
+                throw std::runtime_error("packed FP8 represented value mismatch");
+            }
+        }
+    }
+}
+
 void verify_represented_values() {
     float* output = nullptr;
     check(cudaMalloc(&output, 272 * sizeof(float)));
@@ -350,7 +377,7 @@ void verify_dependencies(unsigned* values, float* output) {
 
 // Rows select either a large or tiny input coordinate. Each output is checked
 // exactly, so a large reference norm cannot hide lost small BF16 values.
-template <bool Nvfp4, bool Tiled>
+template <bool Nvfp4, bool Tiled, int Tiles = 2>
 void verify_volta_activation_range() {
     using namespace ninfer::ops::detail;
     constexpr int n = 128, k = 64, tokens = 33;
@@ -384,8 +411,9 @@ void verify_volta_activation_range() {
                 volta_tiled_kernel<false><<<dim3(n / 32, (tokens + 31) / 32), 128>>>(
                     operands, destination, LinearIdentityEpilogue{});
             else
-                volta_qpn_kernel<2, false><<<dim3(n / 32, (tokens + 15) / 16), 128>>>(
-                    operands, destination, LinearIdentityEpilogue{});
+                volta_qpn_kernel<Tiles, false>
+                    <<<dim3(n / 32, (tokens + Tiles * 8 - 1) / (Tiles * 8)), 128>>>(
+                        operands, destination, LinearIdentityEpilogue{});
         };
         if constexpr (Nvfp4)
             invoke(Nvfp4A16Operands{x, weights, scales, n, k, tokens, 1.f});
@@ -396,15 +424,27 @@ void verify_volta_activation_range() {
     };
     // Input mutation exercises exact admission, sparse correction and the
     // dense-residual FP32 fallback using the actual production kernels.
-    for (int mode = 0; mode < 3; ++mode) {
+    for (int mode = 0; mode < 8; ++mode) {
         std::fill(input.begin(), input.end(), __float2bfloat16(0.f));
         for (int token = 0; token < tokens; ++token) {
             if (mode == 2) {
                 for (int col = 0; col < k; ++col)
                     input[token * k + col] = __float2bfloat16(token % 2 ? 1.e-30f : 1.e15f);
-            } else {
+            } else if (mode < 2) {
                 input[token * k]     = __float2bfloat16(mode == 0 ? 1.f : 1.e15f);
                 input[token * k + 3] = __float2bfloat16(1.e-30f);
+            } else if (mode == 3 || mode == 4) {
+                // The low BF16 mantissa bit is exactly representable at the
+                // FP16 subnormal boundary, and needs correction one bit below.
+                input[token * k] = __float2bfloat16(1.f);
+                input[token * k + 3] =
+                    __float2bfloat16(std::ldexp(1.0078125f, mode == 3 ? -32 : -33));
+            } else if (mode == 5) {
+                input[token * k]     = __ushort_as_bfloat16(0x7f7f); // largest finite BF16
+                input[token * k + 3] = __ushort_as_bfloat16(1);      // smallest BF16 subnormal
+            } else if (mode == 6) {
+                input[token * k]     = __ushort_as_bfloat16(1);
+                input[token * k + 3] = __ushort_as_bfloat16(3);
             }
         }
         check(cudaMemcpy(x, input.data(), input.size() * 2, cudaMemcpyHostToDevice));
@@ -444,6 +484,7 @@ int main() {
         verify_volta_activation_range<false, false>();
         verify_volta_activation_range<false, true>();
         verify_volta_activation_range<true, false>();
+        verify_volta_activation_range<true, false, 1>();
         verify_volta_activation_range<true, true>();
         verify<0>(in, out);
         verify<0>(in, out, true);
@@ -486,6 +527,7 @@ int main() {
         verify_copies_and_quantization(in, out);
         verify_reductions();
         verify_represented_values();
+        verify_packed_fp8();
         verify_dependencies(in, out);
         check(cudaFree(in));
         check(cudaFree(out));

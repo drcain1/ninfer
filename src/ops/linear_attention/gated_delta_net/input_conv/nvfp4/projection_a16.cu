@@ -48,7 +48,7 @@ void launch_nvfp4_gdn_input_a16(const Tensor& x, const Weight& weight, Tensor& q
                                 cudaStream_t stream) {
 #if NINFER_TARGET_V100
     if (x.ne[1] > 4)
-        return launch_volta_linear<2, 32>(
+        return launch_volta_linear<2, 32, false, 1>(
             nvfp4_a16_operands(x, weight),
             LinearBf16SegmentedOutput<10240, 6144>{static_cast<__nv_bfloat16*>(qkv.data),
                                                    static_cast<__nv_bfloat16*>(z.data)},

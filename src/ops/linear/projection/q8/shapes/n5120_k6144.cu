@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/projection/q8/v100/gemv.cuh"
+#endif
 #include "ops/linear/projection/q8/shapes.h"
 #include "ops/common/cuda/memory.cuh"
 #include "ops/linear/kernels/q8/q8_instance_launch.cuh"
@@ -28,6 +32,10 @@ using C64 =
 } // namespace
 
 Q8Launch select_q8_n5120_k6144(std::int32_t tokens) {
+#if NINFER_TARGET_V100
+    if (tokens == 1) return launch_q8_volta_gemv<1>;
+    if (tokens <= 4) return launch_q8_volta_gemv<4>;
+#endif
     if (tokens <= 4) return launch_q8_a16_sliced<Geometry, 4, C4>;
     if (tokens <= 8) return launch_q8_a16_sliced<Geometry, 8, C8>;
     if (tokens <= 16) return launch_q8_a16_sliced<Geometry, 16, C16>;

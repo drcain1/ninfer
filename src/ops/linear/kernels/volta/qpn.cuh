@@ -23,6 +23,16 @@ __device__ __forceinline__ void volta_qpn_mma(float (&d)[8], unsigned a0, unsign
                  : "r"(a0), "r"(a1), "r"(b0), "r"(b1));
 }
 
+// E4M3's bias is eight below FP16. Preserve subnormals by rebiasing
+// the packed half values with an exact power of two; retain both NaN codes.
+__device__ __forceinline__ half2 volta_fp8_pair(unsigned lo, unsigned hi) {
+    const unsigned packed = (lo & 255u) | ((hi & 255u) << 16);
+    unsigned bits         = ((packed << 8) & 0x80008000u) | ((packed << 7) & 0x3f803f80u);
+    if ((lo & 127) == 127) bits |= 0x7fffu;
+    if ((hi & 127) == 127) bits |= 0x7fff0000u;
+    return __hmul2(*reinterpret_cast<const half2*>(&bits), __float2half2_rn(256.f));
+}
+
 __device__ __forceinline__ std::int64_t volta_nvfp4_scale(int row, int group, int k) {
     return std::int64_t(row / 128) * (k / 64) * 512 + (group / 4) * 512 + (row & 31) * 16 +
            ((row % 128) / 32) * 4 + group % 4;
@@ -45,23 +55,45 @@ __device__ __forceinline__ float volta_weight_factor(Fp8A16Operands p, int row) 
 
 __device__ __forceinline__ float volta_weight_factor(Nvfp4A16Operands p, int) { return p.alpha; }
 
+// The scale is a normal power of two with exponent in [-120, 120]. Its
+// reciprocal is exact and normal too; avoid general FP32 division per input.
+__device__ __forceinline__ float volta_inverse_scale(float scale) {
+    return __uint_as_float((254u - (__float_as_uint(scale) >> 23)) << 23);
+}
+
 // Scale BF16 activations by an exact power of two to retain small values in
 // FP16. Every conversion is checked; any lost value is retained in FP32.
 // Neither path allocates or repacks persistent weights.
 __device__ __forceinline__ float volta_activation_scale(const __nv_bfloat16* x, int count,
-                                                        unsigned (&maxima)[4]) {
-    unsigned largest = 0;
-    for (int i = threadIdx.x; i < count; i += 128)
-        largest = max(largest, unsigned(__bfloat16_as_ushort(x[i]) & 0x7fff));
+                                                        unsigned (&extrema)[8], bool& exact) {
+    unsigned largest = 0, smallest = 0x7fff;
+    // Supported contractions have K divisible by eight and aligned BF16 inputs.
+    for (int i = threadIdx.x * 8; i < count; i += 128 * 8) {
+        const uint4 packed = __ldg(reinterpret_cast<const uint4*>(x + i));
+        const unsigned words[]{packed.x, packed.y, packed.z, packed.w};
 #pragma unroll
-    for (int delta = 16; delta; delta /= 2)
-        largest = max(largest, __shfl_down_sync(0xffffffffu, largest, delta));
-    if ((threadIdx.x & 31) == 0) maxima[threadIdx.x / 32] = largest;
+        for (int j = 0; j < 4; ++j) {
+            const unsigned lo = words[j] & 0x7fff, hi = (words[j] >> 16) & 0x7fff;
+            largest  = max(largest, max(lo, hi));
+            smallest = min(smallest, min(lo ? lo : 0x7fff, hi ? hi : 0x7fff));
+        }
+    }
+#pragma unroll
+    for (int delta = 16; delta; delta /= 2) {
+        largest  = max(largest, __shfl_down_sync(0xffffffffu, largest, delta));
+        smallest = min(smallest, __shfl_down_sync(0xffffffffu, smallest, delta));
+    }
+    if ((threadIdx.x & 31) == 0) {
+        extrema[threadIdx.x / 32]     = largest;
+        extrema[4 + threadIdx.x / 32] = smallest;
+    }
     __syncthreads();
-    largest = max(max(maxima[0], maxima[1]), max(maxima[2], maxima[3]));
-    // Place the largest magnitude near 2^12, leaving FP16 headroom. The
-    // following round-trip check, rather than this estimate, admits the tile.
-    const int exponent = min(120, max(-120, 12 - (int(largest >> 7) - 127)));
+    largest  = max(max(extrema[0], extrema[1]), max(extrema[2], extrema[3]));
+    smallest = min(min(extrema[4], extrema[5]), min(extrema[6], extrema[7]));
+    // A BF16 significand fits exactly in FP16 through exponent +15. At
+    // exponent -17 its seven fraction bits still fit FP16 subnormals.
+    const int exponent = min(120, max(-120, 15 - (int(largest >> 7) - 127)));
+    exact = largest < 0x7f80 && smallest >= 128 && int(smallest >> 7) + exponent >= 110;
     return __uint_as_float(unsigned(exponent + 127) << 23);
 }
 
@@ -78,18 +110,22 @@ struct VoltaActivationResiduals {
 
 __device__ __forceinline__ bool volta_activation_residuals(const __nv_bfloat16* x, int count,
                                                            float scale,
-                                                           VoltaActivationResiduals& residuals) {
+                                                           VoltaActivationResiduals& residuals,
+                                                           bool exact) {
     if (threadIdx.x == 0) {
         residuals.count     = 0;
         residuals.nonfinite = 0;
     }
     __syncthreads();
+    // The exponent bounds prove exact conversion of every nonzero input.
+    if (exact) return false;
     for (int i = threadIdx.x; i < count; i += 128) {
         const float original = __bfloat162float(x[i]);
         if (!isfinite(original)) {
             atomicOr(&residuals.nonfinite, 1u);
         } else {
-            const float represented = __half2float(__float2half_rn(original * scale)) / scale;
+            const float inverse     = volta_inverse_scale(scale);
+            const float represented = __half2float(__float2half_rn(original * scale)) * inverse;
             const float correction  = original - represented;
             if (correction != 0.f) {
                 const unsigned slot = atomicAdd(&residuals.count, 1u);
@@ -143,21 +179,23 @@ __device__ __forceinline__ int volta_qpn_row(int local, int rows) {
 }
 
 template <int Tiles, bool Paired, class Operands, class Output, class Epilogue>
-__global__ __launch_bounds__(128, Tiles == 1   ? 8
+__global__ __launch_bounds__(128, Tiles == 1   ? 4
                                   : Tiles == 2 ? 4
                                                : 1) void volta_qpn_kernel(Operands p, Output output,
                                                                           Epilogue epilogue) {
     __shared__ float partial[4][Tiles * 8 * 32];
-    __shared__ unsigned maxima[4];
+    __shared__ unsigned maxima[8];
     __shared__ VoltaActivationResiduals residuals;
     const int lane = threadIdx.x & 31, warp = threadIdx.x / 32;
-    const int qp                 = (lane / 4) % 4;
-    const int r                  = lane % 4 + (lane / 16) * 4;
-    const int token0             = int(blockIdx.y) * (Tiles * 8);
-    const int tokens             = min(Tiles * 8, p.tokens - token0);
-    const auto* x                = p.x + std::int64_t(token0) * p.k;
-    const float activation_scale = volta_activation_scale(x, tokens * p.k, maxima);
-    const bool fallback = volta_activation_residuals(x, tokens * p.k, activation_scale, residuals);
+    const int qp     = (lane / 4) % 4;
+    const int r      = lane % 4 + (lane / 16) * 4;
+    const int token0 = int(blockIdx.y) * (Tiles * 8);
+    const int tokens = min(Tiles * 8, p.tokens - token0);
+    const auto* x    = p.x + std::int64_t(token0) * p.k;
+    bool exact;
+    const float activation_scale = volta_activation_scale(x, tokens * p.k, maxima, exact);
+    const bool fallback =
+        volta_activation_residuals(x, tokens * p.k, activation_scale, residuals, exact);
     if (fallback) {
         for (int e = threadIdx.x; e < tokens * 32; e += 128) {
             const int row = volta_qpn_row<Paired>(e % 32, p.rows);
@@ -207,11 +245,8 @@ __global__ __launch_bounds__(128, Tiles == 1   ? 8
 #pragma unroll
                 for (int j = 0; j < 8; ++j) {
                     const int first = (j / 4) * 8 + j % 4;
-                    const float lo  = common::volta::decode<common::volta::Format::E4m3>(
-                        (words[first / 4] >> ((first % 4) * 8)) & 255);
-                    const float hi = common::volta::decode<common::volta::Format::E4m3>(
-                        (words[(first + 4) / 4] >> ((first % 4) * 8)) & 255);
-                    b[j] = __floats2half2_rn(lo, hi);
+                    b[j]            = volta_fp8_pair(words[first / 4] >> ((first % 4) * 8),
+                                                     words[(first + 4) / 4] >> ((first % 4) * 8));
                 }
             }
 #pragma unroll
@@ -254,9 +289,11 @@ __global__ __launch_bounds__(128, Tiles == 1   ? 8
             for (int w = 0; w < 4; ++w) value += partial[w][e];
             const int row = volta_qpn_row<Paired>(e % 32, p.rows);
             partial[0][e] =
-                row < p.rows ? volta_correct(p, row, e / 32, value / activation_scale, residuals) *
-                                   volta_weight_factor(p, row)
-                             : 0;
+                row < p.rows
+                    ? volta_correct(p, row, e / 32, value * volta_inverse_scale(activation_scale),
+                                    residuals) *
+                          volta_weight_factor(p, row)
+                    : 0;
         }
     }
     __syncthreads();

@@ -11,7 +11,7 @@ namespace {
 
 void launch_volta(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     auto* data = static_cast<__nv_bfloat16*>(out.data);
-    launch_volta_linear<2, 32>(nvfp4_a16_operands(x, w), LinearBf16Output{data, w.n},
+    launch_volta_linear<2, 32, false, 1>(nvfp4_a16_operands(x, w), LinearBf16Output{data, w.n},
                                LinearResidualAddEpilogue{{data, w.n}}, stream);
 }
 #endif

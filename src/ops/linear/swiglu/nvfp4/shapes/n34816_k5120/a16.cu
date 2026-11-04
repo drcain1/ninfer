@@ -35,7 +35,7 @@ void launch_two_tokens(const Tensor& x, const Weight& weight, Tensor& out, cudaS
 void launch_nvfp4_swiglu_small_t(const Tensor& x, const Weight& weight, Tensor& out,
                                  cudaStream_t stream) {
 #if NINFER_TARGET_V100
-    return launch_volta_linear<2, 32, true>(
+    return launch_volta_linear<2, 32, true, 1>(
         nvfp4_a16_operands(x, weight),
         LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n / 2}, SwiGluPairEpilogue{},
         stream);
