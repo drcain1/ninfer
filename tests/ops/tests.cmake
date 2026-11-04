@@ -20,3 +20,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/kv_cache/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/softmax_attention/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/moe/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ple/tests.cmake")
+
+if(NINFER_TARGET STREQUAL "v100")
+  ninfer_add_test(volta_primitives_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/common/test_volta_primitives.cu"
+    LIBRARIES CUDA::cudart)
+  set_tests_properties(volta_primitives_test PROPERTIES LABELS "ops")
+endif()

@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/kernels/fp8/fp8_template_launch.cuh"
 #include "core/weight.h"
 #include "ops/linear_attention/gated_delta_net/input_conv/fp8/launch.h"
@@ -72,6 +76,15 @@ Launcher select_projection(int columns) {
 
 void launch_fp8_gdn_input_matrix(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                                  cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    if (x.ne[1] > 4)
+        return launch_volta_linear<2, 32>(
+            fp8_a16_operands(x, weight),
+            LinearBf16SegmentedOutput<10240, 6144>{static_cast<__nv_bfloat16*>(qkv.data),
+                                                   static_cast<__nv_bfloat16*>(z.data)},
+            LinearIdentityEpilogue{}, stream);
+#endif
+
     select_projection(x.ne[1])(x, weight, qkv, z, stream);
 }
 } // namespace ninfer::ops::detail

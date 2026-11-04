@@ -1,4 +1,7 @@
 #pragma once
+#include "core/platform.h"
+#include "ops/linear/kernels/bf16/bf16_mma_launch.cuh"
+#include <type_traits>
 
 #include "ops/common/cuda/pipeline.cuh"
 #include "ops/common/host/launch.h"
@@ -12,6 +15,19 @@
 #include <string>
 
 namespace ninfer::ops::detail {
+#if NINFER_TARGET_V100
+// Preserve geometry and tail predicates while removing the dedicated TMA warp
+// and selecting Volta's ordinary shared-memory layout.
+template <class Schedule>
+struct Bf16VoltaMmaSchedule : Schedule {
+    static constexpr int kProducerThreads = 0;
+    static constexpr int kThreads = Schedule::kWarpsRows * Schedule::kWarpsTokens * 32;
+    static constexpr auto kSwizzle = Bf16MmaSwizzle::Xor64;
+    static constexpr int kSharedBytes = Schedule::kStages *
+        (Schedule::kBlockRows + Schedule::kBlockTokens) * Schedule::kBlockK * 2;
+};
+#endif
+
 
 struct alignas(128) Bf16TmaDescriptors {
     CUtensorMap weight;
@@ -179,6 +195,12 @@ template <class Schedule, int Splits = 1, class Output, class Epilogue,
           class WeightAccess = Bf16ContiguousTmaWeightAccess>
 void launch_bf16_a16_tma_mma(const Bf16A16Operands& p, Output output, Epilogue epilogue,
                              cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    static_assert(std::is_same_v<WeightAccess, Bf16ContiguousTmaWeightAccess>,
+                  "V100 BF16 fallback requires contiguous weights");
+    launch_bf16_mma_partitions<Bf16VoltaMmaSchedule<Schedule>, Splits>(p, output, epilogue, stream);
+#else
+
     static_assert(Splits >= 1 && Splits <= 32);
     if constexpr (Splits > 1) {
         if (p.k % (Schedule::kBlockK * Splits))
@@ -210,6 +232,8 @@ void launch_bf16_a16_tma_mma(const Bf16A16Operands& p, Output output, Epilogue e
         else
             launch.template operator()<false>();
     });
+
+#endif
 }
 
 } // namespace ninfer::ops::detail

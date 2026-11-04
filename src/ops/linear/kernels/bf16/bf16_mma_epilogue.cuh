@@ -139,8 +139,9 @@ struct Bf16MmaStreamingWarpStoreEpilogue : Bf16MmaWarpStoreEpilogue {
     }
 };
 
-// Reuse the retired TMA staging area to transpose the accumulator fragments into
-// contiguous BF16 output vectors. All threads, including the producer, participate.
+// Reuse the retired staging area to transpose the accumulator fragments into
+// contiguous BF16 output vectors. All threads participate; an optional TMA
+// producer warp contributes only to the final stores.
 struct Bf16TmaVectorEpilogue {
     static constexpr bool kTmaCollective = true;
 
@@ -155,12 +156,13 @@ struct Bf16TmaVectorEpilogue {
                 int token_begin, int rows, int tokens) const {
         constexpr int BR = Schedule::kBlockRows, BT = Schedule::kBlockTokens;
         constexpr int PaddedRows = (BR + 63) / 64 * 64;
-        static_assert(BR % 8 == 0 && Schedule::kProducerThreads == 32);
+        static_assert(BR % 8 == 0);
+        static_assert(Schedule::kProducerThreads == 0 || Schedule::kProducerThreads == 32);
         auto* tile    = reinterpret_cast<__nv_bfloat16*>(scratch);
         const auto at = [&](int row, int token) {
             return tile + token * PaddedRows + (row ^ ((token & 7) << 3));
         };
-        if (threadIdx.x >= Schedule::kProducerThreads) {
+        if (int(threadIdx.x) >= Schedule::kProducerThreads) {
             const int tid  = int(threadIdx.x) - Schedule::kProducerThreads;
             const int warp = tid / 32, lane = tid & 31;
             const int wm = warp / Schedule::kWarpsTokens, wn = warp % Schedule::kWarpsTokens;

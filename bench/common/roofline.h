@@ -46,6 +46,13 @@ inline constexpr Roofline kRoofline{
     .mxfp8_f32_tflops   = 249.52,
     .nvfp4_f32_tflops   = 499.02,
 };
+#elif NINFER_TARGET_V100
+// Nominal V100 PCIe bandwidth; sustained and emulated matrix rates are uncalibrated.
+// https://images.nvidia.com/content/tesla/pdf/Tesla-V100-PCIe-Product-Brief.pdf
+inline constexpr Roofline kRoofline{
+    .target     = "v100",
+    .memory_gbs = 900.0,
+};
 #endif
 
 // Console uses "-"; CSV callers pass "" so absent references stay empty fields.

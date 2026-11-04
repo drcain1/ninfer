@@ -27,6 +27,40 @@ std::vector<Invocation> a16_capacity_calls() {
     return calls;
 }
 
+// Exercise values both above FP16's range and below its subnormal floor.
+// The projection oracle decodes BF16 directly and contracts in FP64.
+template <int Range>
+std::vector<std::uint16_t> make_wide_activation(int k, int tokens, std::uint32_t) {
+    std::vector<std::uint16_t> values(static_cast<std::size_t>(k) * tokens);
+    for (int token = 0; token < tokens; ++token)
+        for (int col = 0; col < k; ++col) {
+            const float magnitude = (Range == 1 || (Range == 2 && token % 2)) ? 1.e-30f : 1.e15f;
+            values[static_cast<std::size_t>(token) * k + col] =
+                ninfer::test::f32_to_bf16(float((col * 7 + token) % 19 - 9) * magnitude);
+        }
+    return values;
+}
+
+void run_fp8_wide_activation(Suite& suite) {
+    const std::array calls{
+        Invocation{5, CallForm::Policy, ops::LinearPolicy::A16Only, true, "bf16-full-range"},
+        Invocation{33, CallForm::Policy, ops::LinearPolicy::A16Only, true, "bf16-full-range"},
+    };
+    ShapeCase shape{14336, 5120, 887U, Comparison::Sampled, true, calls};
+    shape.activation_generator   = make_wide_activation<0>;
+    shape.verify_each_invocation = true;
+    add_shape(suite, QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks, make_fp8_weight,
+              shape);
+    shape.seed                 = 889U;
+    shape.activation_generator = make_wide_activation<1>;
+    add_shape(suite, QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks, make_fp8_weight,
+              shape);
+    shape.seed                 = 891U;
+    shape.activation_generator = make_wide_activation<2>;
+    add_shape(suite, QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks, make_fp8_weight,
+              shape);
+}
+
 void run_fp8_a16(Suite& suite) {
     const auto attn_invocations = a16_capacity_calls();
     add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks,
@@ -334,5 +368,6 @@ void run_fp8_a8(Suite& suite) {
 
 void ninfer::test::linear::add_fp8_cases(Suite& suite) {
     run_fp8_a16(suite);
+    run_fp8_wide_activation(suite);
     run_fp8_a8(suite);
 }

@@ -469,7 +469,7 @@ void add_shape(linear_suite::Suite& suite, const ShapeCase& shape) {
 int main(int argc, char** argv) {
     linear_suite::Suite suite;
     for (int n : {4096, 8192})
-        for (int t : {1, 4, 8, 33, 64, 4096})
+        for (int t : {1, 4, 8, 33, 64, 129, 257, 4096})
             suite.add(linear_suite::make_case("bf16", n, 128, t, ops::LinearPolicy::A16Only,
                                               linear_suite::Execution::Graph, "independent-inputs"),
                       [=] { return bf16_pair(n, t); });

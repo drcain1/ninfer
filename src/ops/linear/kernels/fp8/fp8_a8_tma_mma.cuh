@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/platform.h"
+#include "ops/linear/kernels/fp8/fp8_a8_launch.cuh"
+
 #include "ops/common/cuda/pipeline.cuh"
 #include "ops/common/host/launch.h"
 #include "ops/common/numeric/math.h"
@@ -15,6 +18,17 @@
 #include <type_traits>
 
 namespace ninfer::ops::detail {
+#if NINFER_TARGET_V100
+// Preserve quantized operands and row policies with synchronous shared staging.
+template <class Schedule>
+struct Fp8VoltaMmaSchedule : Schedule {
+    static constexpr bool kTmaSwizzle = false;
+    static constexpr int kProducerThreads = 0;
+    static constexpr int kThreads = Schedule::kWarps * 32;
+    static constexpr int kSharedBytes = Schedule::kStorageBytes;
+};
+#endif
+
 
 struct alignas(128) Fp8TmaDescriptors {
     CUtensorMap activation;
@@ -269,6 +283,11 @@ template <class Schedule, class Output, class Epilogue, class RowPolicy = Fp8Ide
 void launch_fp8_a8_tma_mma(const Fp8A8Operands& p, Output output, Epilogue epilogue,
                            cudaStream_t stream, float* partials = nullptr,
                            RowPolicy row_policy = {}) {
+#if NINFER_TARGET_V100
+    (void)partials;
+    launch_fp8_a8_mma<Fp8VoltaMmaSchedule<Schedule>>(p, output, epilogue, stream, row_policy);
+#else
+
     validate_fp8_operands<Schedule>(p);
     if (p.rows % Schedule::kBlockRows || p.k % Schedule::kBlockK)
         throw std::invalid_argument("FP8 TMA requires complete row/K tiles");
@@ -322,6 +341,7 @@ void launch_fp8_a8_tma_mma(const Fp8A8Operands& p, Output output, Epilogue epilo
         else
             launch.template operator()<false, false>();
     });
+#endif
 }
 
 } // namespace ninfer::ops::detail

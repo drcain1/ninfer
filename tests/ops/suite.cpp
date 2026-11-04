@@ -43,17 +43,19 @@ int OpSuite::main(int argc, char** argv) const {
     try {
         bool list = false;
         std::map<std::string, std::string> filters;
+        std::set<std::string> requested_cases;
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
             if (option == "--help") {
-                std::cout << "Usage: " << argv[0] << " [--list] [--case ID]";
+                std::cout << "Usage: " << argv[0] << " [--list] [--case ID]...";
                 for (const auto& [name, count] : filters_) {
                     std::cout << " [--" << name;
                     for (int j = 0; j < count; ++j) std::cout << " VALUE";
                     std::cout << ']';
                 }
                 std::cout
-                    << "\nFilters intersect declared cases. Graph sequences are indivisible.\n";
+                    << "\nRepeated --case selects a union; other filters intersect it."
+                       " Graph sequences are indivisible.\n";
                 return 0;
             }
             if (option == "--list") {
@@ -72,6 +74,11 @@ int OpSuite::main(int argc, char** argv) const {
                 if (j) value += ' ';
                 value += argv[i];
             }
+            if (option == "--case") {
+                if (!requested_cases.insert(std::move(value)).second)
+                    throw std::invalid_argument("repeated case ID");
+                continue;
+            }
             if (!filters.emplace(option.substr(2), std::move(value)).second)
                 throw std::invalid_argument("repeated filter: " + option);
         }
@@ -84,9 +91,9 @@ int OpSuite::main(int argc, char** argv) const {
                 const auto& test = groups_[g].cases[c];
                 if (test.id.empty() || !ids.insert(test.id).second)
                     throw std::logic_error("empty or duplicate case ID: " + test.id);
+                if (!requested_cases.empty() && !requested_cases.contains(test.id)) continue;
                 const bool matches =
                     std::all_of(filters.begin(), filters.end(), [&](const auto& f) {
-                        if (f.first == "case") return f.second == test.id;
                         return std::any_of(
                             test.tags.begin(), test.tags.end(), [&](const auto& tag) {
                                 return tag.first == f.first && tag.second == f.second;
@@ -98,6 +105,8 @@ int OpSuite::main(int argc, char** argv) const {
                 if (list) std::cout << test.id << '\n';
             }
         }
+        for (const auto& id : requested_cases)
+            if (!ids.contains(id)) throw std::invalid_argument("unknown case ID: " + id);
         if (!count) throw std::invalid_argument("no declared cases match the filters");
         if (list) return 0;
         if (needs_cuda_ && cuda_unavailable()) {

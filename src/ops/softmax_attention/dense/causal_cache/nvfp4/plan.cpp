@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "ops/softmax_attention/dense/causal_cache/nvfp4/plan.h"
 #include "ops/softmax_attention/kernels/causal/operands.h"
 #include <algorithm>
@@ -14,7 +15,7 @@ inline constexpr bool causal_query_tiles_underfill_sms(int independent_tiles,
     return filled < static_cast<std::int64_t>(multiprocessor_count) * 9 / 10;
 }
 
-constexpr int kGroupedPrefillMaxWidth = 192;
+constexpr int kGroupedPrefillMaxWidth = NINFER_TARGET_V100 ? 2147483647 : 192;
 } // namespace
 
 Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,

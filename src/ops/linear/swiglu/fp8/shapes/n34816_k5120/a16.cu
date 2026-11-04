@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/kernels/fp8/fp8_instances.cuh"
 #include "ops/linear/swiglu/row_major_mma_epilogue.cuh"
 #include "ops/linear/kernels/fp8/fp8_template_launch.cuh"
@@ -32,6 +36,13 @@ void launch_fp8_swiglu_small_t(const Tensor& x, const Weight& weight, Tensor& ou
 
 void launch_fp8_swiglu_matrix(const Tensor& x, const Weight& weight, Tensor& out,
                               cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    return launch_volta_linear<2, 32, true>(
+        fp8_a16_operands(x, weight),
+        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n / 2}, SwiGluPairEpilogue{},
+        stream);
+#endif
+
     const auto p = fp8_a16_operands(x, weight);
     const LinearBf16Output output{static_cast<__nv_bfloat16*>(out.data), weight.n / 2};
     const auto sliced = [&]<int T, int W, int Stages>() {

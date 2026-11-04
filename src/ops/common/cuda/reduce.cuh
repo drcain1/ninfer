@@ -11,6 +11,75 @@ namespace ninfer::ops::common {
 inline constexpr int kWarpSize          = 32;
 inline constexpr unsigned kFullWarpMask = 0xffffffffu;
 
+// The mask may be sparse (e.g. merging a subset of sampling ranks).
+template <class T>
+__device__ __forceinline__ T masked_warp_max(unsigned mask, T value) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    return __reduce_max_sync(mask, value);
+#else
+    if (mask == kFullWarpMask) {
+#pragma unroll
+        for (int delta = 16; delta; delta >>= 1) {
+            const T other = __shfl_xor_sync(mask, value, delta);
+            value = value > other ? value : other;
+        }
+        return value;
+    }
+    const T original = value;
+    for (unsigned remaining = mask; remaining; remaining &= remaining - 1) {
+        const T other = __shfl_sync(mask, original, __ffs(remaining) - 1);
+        value = value > other ? value : other;
+    }
+    return value;
+#endif
+}
+
+// The mask may be sparse (e.g. merging a subset of sampling ranks).
+template <class T>
+__device__ __forceinline__ T masked_warp_min(unsigned mask, T value) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    return __reduce_min_sync(mask, value);
+#else
+    if (mask == kFullWarpMask) {
+#pragma unroll
+        for (int delta = 16; delta; delta >>= 1) {
+            const T other = __shfl_xor_sync(mask, value, delta);
+            value = value < other ? value : other;
+        }
+        return value;
+    }
+    const T original = value;
+    for (unsigned remaining = mask; remaining; remaining &= remaining - 1) {
+        const T other = __shfl_sync(mask, original, __ffs(remaining) - 1);
+        value = value < other ? value : other;
+    }
+    return value;
+#endif
+}
+
+// The mask may be sparse (e.g. merging a subset of sampling ranks).
+template <class T>
+__device__ __forceinline__ T masked_warp_or(unsigned mask, T value) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    return __reduce_or_sync(mask, value);
+#else
+    if (mask == kFullWarpMask) {
+#pragma unroll
+        for (int delta = 16; delta; delta >>= 1) {
+            const T other = __shfl_xor_sync(mask, value, delta);
+            value = value | other;
+        }
+        return value;
+    }
+    const T original = value;
+    for (unsigned remaining = mask; remaining; remaining &= remaining - 1) {
+        const T other = __shfl_sync(mask, original, __ffs(remaining) - 1);
+        value = value | other;
+    }
+    return value;
+#endif
+}
+
 template <int Width = kWarpSize, class T>
 __device__ __forceinline__ T warp_sum(T x, unsigned mask = kFullWarpMask) {
     static_assert(Width > 0 && Width <= kWarpSize && (Width & (Width - 1)) == 0);

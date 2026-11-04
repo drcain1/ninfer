@@ -22,10 +22,7 @@ endif()
 if(NINFER_BUILD_BENCHMARKS AND NOT NINFER_BUILD_OPS)
   message(FATAL_ERROR "NINFER_BUILD_BENCHMARKS requires NINFER_BUILD_OPS")
 endif()
-if(NINFER_TARGET STREQUAL "v100" AND NINFER_BUILD_OPS)
-  message(FATAL_ERROR
-    "V100 kernel port is incomplete; only the v100-core preset is currently available")
-endif()
+
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

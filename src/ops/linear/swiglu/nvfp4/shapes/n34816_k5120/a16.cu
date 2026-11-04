@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "core/weight.h"
 #include "ops/linear/swiglu/nvfp4/dispatch.h"
 
@@ -30,6 +34,13 @@ void launch_two_tokens(const Tensor& x, const Weight& weight, Tensor& out, cudaS
 
 void launch_nvfp4_swiglu_small_t(const Tensor& x, const Weight& weight, Tensor& out,
                                  cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    return launch_volta_linear<2, 32, true>(
+        nvfp4_a16_operands(x, weight),
+        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n / 2}, SwiGluPairEpilogue{},
+        stream);
+#endif
+
     const auto p = nvfp4_a16_operands(x, weight);
     const LinearBf16Output output{static_cast<__nv_bfloat16*>(out.data), kIntermediate};
     if (x.ne[1] <= 2)

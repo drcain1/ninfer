@@ -1,8 +1,13 @@
 # syntax=docker/dockerfile:1
 
-FROM nvidia/cuda:13.1.2-devel-ubuntu24.04 AS build
+# V100: --build-arg CUDA_VERSION=12.8.1 --build-arg NINFER_TARGET=v100
+# Set BUILD_JOBS to fit the builder's memory (for example, 3 on a 32 GiB host).
+ARG CUDA_VERSION=13.1.2
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04 AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG NINFER_TARGET=rtx5090
+ARG BUILD_JOBS
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         cmake \
@@ -25,13 +30,13 @@ WORKDIR /src
 COPY . .
 
 RUN cmake -S . -B /build -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=rtx5090 \
+        -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=${NINFER_TARGET} \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
-    && cmake --build /build --parallel --target ninfer ninfer-serve
+    && cmake --build /build --parallel ${BUILD_JOBS} --target ninfer ninfer-serve
 
-FROM nvidia/cuda:13.1.2-runtime-ubuntu24.04
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \

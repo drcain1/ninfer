@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/projection/fp8/fp8_shapes.h"
 #include "ops/common/cuda/memory.cuh"
 #include "ops/linear/projection/fp8/fp8_launch.cuh"
@@ -15,6 +19,14 @@ using MidBulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 
 using Bulk    = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>, 170, 4, 8>;
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    if (x.ne[1] > 4)
+        return launch_volta_linear<2, 32>(
+            fp8_a16_operands(x, weight),
+            LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n},
+            LinearIdentityEpilogue{}, stream);
+#endif
+
     const int tokens = x.ne[1];
     if (tokens == 1) return fp8_linear_a16_gemv<Geometry, Gemv>(x, weight, out, stream);
     if (tokens <= 16) return fp8_linear_a16_sliced_k<Geometry, Sliced16>(x, weight, out, stream);
@@ -50,7 +62,10 @@ void launch_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Workspac
     launch_fp8_a8_tma<Geometry, Bulk>(x, weight, out, scratch, stream);
 }
 
-bool uses_a8(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 17; }
+bool uses_a8(std::int32_t, std::int32_t max_tokens) {
+    if (NINFER_TARGET_V100) return false;
+    return max_tokens >= 17;
+}
 
 std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
     return max_tokens > 256 ? Bulk::kPartialBytes : 0;

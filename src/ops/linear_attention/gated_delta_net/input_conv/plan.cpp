@@ -1,3 +1,4 @@
+#include "core/platform.h"
 #include "ops/linear_attention/gated_delta_net/input_conv/plan.h"
 #include "ops/linear_attention/gated_delta_net/input_conv/workspace.h"
 #include <algorithm>
@@ -5,6 +6,7 @@
 namespace ninfer::ops::detail::gdn_input {
 
 ProjectionPlan select_projection_plan(const WeightProfile& weights, std::int32_t columns) {
+    if (NINFER_TARGET_V100) return {Compute::A16};
     if (weights.format == Format::Fp8 && allows_a8(weights.policy) && columns >= 17)
         return {Compute::A8};
     if (weights.format == Format::Nvfp4 && allows_a4(weights.policy)) return {Compute::A4};

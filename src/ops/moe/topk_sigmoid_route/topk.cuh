@@ -1,3 +1,4 @@
+#include "ops/common/cuda/reduce.cuh"
 #pragma once
 #include "ops/moe/kernels/cuda/routing/topk.cuh"
 
@@ -30,8 +31,8 @@ __global__ __launch_bounds__(Warps * 32) void sigmoid_correction_top8(
             }
         }
         const auto score   = common::ordered_score_bits(best.score);
-        const auto maximum = __reduce_max_sync(0xffffffff, score);
-        const int selected = __reduce_min_sync(0xffffffff, score == maximum ? best.id : INT_MAX);
+        const auto maximum = ::ninfer::ops::common::masked_warp_max(0xffffffff, score);
+        const int selected = ::ninfer::ops::common::masked_warp_min(0xffffffff, score == maximum ? best.id : INT_MAX);
         const float selected_probability = __shfl_sync(0xffffffff, best_probability, selected & 31);
         den += selected_probability;
         if (lane == k) {

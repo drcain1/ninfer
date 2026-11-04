@@ -1,7 +1,21 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
+#include "core/platform.h"
 #include "ops/linear/add/nvfp4/launch.cuh"
 
 namespace ninfer::ops::detail {
 namespace {
+#if NINFER_TARGET_V100
+
+void launch_volta(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
+    auto* data = static_cast<__nv_bfloat16*>(out.data);
+    launch_volta_linear<2, 32>(nvfp4_a16_operands(x, w), LinearBf16Output{data, w.n},
+                               LinearResidualAddEpilogue{{data, w.n}}, stream);
+}
+#endif
+
 template <class S, int T = 0, bool Exact = false>
 using Instance = Nvfp4ScheduleInstance<S, 6144, T, Exact>;
 
@@ -28,8 +42,13 @@ LinearAddLaunch select_a16(int tokens) {
 } // namespace
 
 Nvfp4LinearAddPlan select_nvfp4_add_n5120_k6144(LinearPolicy policy, std::int32_t tokens) {
+#if NINFER_TARGET_V100
+    if (tokens > 4) return {launch_volta};
+    return {select_a16(tokens)};
+#endif
+
     if (!allows_a4(policy) || tokens < 17) return {select_a16(tokens)};
-    if (tokens >= 1024)
+    if (!NINFER_TARGET_V100 && tokens >= 1024)
         return {nullptr, launch_nvfp4_add_n5120_k6144_tma, Nvfp4ScaleLayout::Tiled256};
     if (tokens <= 64)
         return {nullptr,

@@ -2,7 +2,22 @@
 add_library(ninfer_ops SHARED)
 ninfer_internal_includes(ninfer_ops)
 ninfer_cuda_library(ninfer_ops)
-target_link_libraries(ninfer_ops PUBLIC ninfer_core PRIVATE ninfer_ops_non_rdc)
+target_link_libraries(ninfer_ops PUBLIC ninfer_core)
+if(NINFER_TARGET STREQUAL "v100")
+  # Some public Ops are self-contained non-RDC units. Retain their entry points
+  # even when no other object inside this shared library calls them.
+  target_link_libraries(ninfer_ops PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,ninfer_ops_non_rdc>")
+  # CMake invokes the host linker directly, bypassing NVCC's large-fatbin
+  # layout. Keep CUDA payloads after ordinary host code/data so x86-64
+  # relative references remain in range even when device images exceed 2 GiB.
+  set(ninfer_ops_linker_script "${PROJECT_SOURCE_DIR}/cmake/CudaFatbin.ld")
+  target_link_options(ninfer_ops PRIVATE
+    "$<HOST_LINK:LINKER:-T,${ninfer_ops_linker_script}>")
+  set_property(TARGET ninfer_ops APPEND PROPERTY LINK_DEPENDS "${ninfer_ops_linker_script}")
+  unset(ninfer_ops_linker_script)
+else()
+  target_link_libraries(ninfer_ops PRIVATE ninfer_ops_non_rdc)
+endif()
 
 # Non-RDC kernels keep instruction and register-allocation choices within one translation unit.
 # This private PIC archive joins the shared library through host launchers.

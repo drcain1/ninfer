@@ -82,6 +82,20 @@
         "NINFER_BUILD_OPS": "OFF",
         "BUILD_TESTING": "ON"
       }
+    },
+    {
+      "name": "v100-release",
+      "inherits": "product",
+      "cacheVariables": {
+        "NINFER_TARGET": "v100"
+      }
+    },
+    {
+      "name": "v100-dev",
+      "inherits": "v100-release",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -112,6 +126,14 @@
     {
       "name": "v100-core",
       "configurePreset": "v100-core"
+    },
+    {
+      "name": "v100-release",
+      "configurePreset": "v100-release"
+    },
+    {
+      "name": "v100-dev",
+      "configurePreset": "v100-dev"
     }
   ],
   "testPresets": [
@@ -146,6 +168,13 @@
     {
       "name": "v100-core",
       "configurePreset": "v100-core",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "v100-dev",
+      "configurePreset": "v100-dev",
       "output": {
         "outputOnFailure": true
       }

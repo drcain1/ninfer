@@ -1,7 +1,20 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/add/fp8/launch.cuh"
 
 namespace ninfer::ops::detail {
 namespace {
+#if NINFER_TARGET_V100
+
+void launch_volta(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
+    auto* data = static_cast<__nv_bfloat16*>(out.data);
+    launch_volta_linear<2, 32>(fp8_a16_operands(x, w), LinearBf16Output{data, w.n},
+                               LinearResidualAddEpilogue{{data, w.n}}, stream);
+}
+#endif
+
 template <class S, int T = 0, bool Exact = false>
 using Instance = Fp8ScheduleInstance<S, 17408, T, Exact>;
 
@@ -26,6 +39,11 @@ using Bulk      = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4
 } // namespace
 
 Fp8LinearAddPlan select_fp8_add_n5120_k17408(LinearPolicy policy, std::int32_t tokens) {
+#if NINFER_TARGET_V100
+    if (tokens > 4) return {launch_volta};
+    return {select_a16(tokens)};
+#endif
+
     if (!allows_a8(policy) || tokens < 20) return {select_a16(tokens)};
     const std::size_t partial_bytes = tokens > 384   ? Bulk::kPartialBytes
                                       : tokens > 256 ? Wide::kPartialBytes

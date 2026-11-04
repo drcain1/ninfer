@@ -12,6 +12,14 @@ namespace ninfer::ops::common {
 template <int Bytes, Cache Policy = Cache::ca>
 __device__ __forceinline__ void cp_async(void* smem_dst, const void* gmem_src) {
     static_assert(Bytes == 4 || Bytes == 8 || Bytes == 16, "cp_async supports 4, 8, or 16 bytes");
+    static_assert(Policy != Cache::cg || Bytes == 16, "cp.async.cg requires a 16-byte copy");
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    // cp.async already requires size-aligned pointers. Preserve vector loads
+    // when replacing the asynchronous instruction with a synchronous copy.
+    if constexpr (Bytes == 16) store_vec(smem_dst, load_vec<uint4>(gmem_src));
+    if constexpr (Bytes == 8) store_vec(smem_dst, load_vec<uint2>(gmem_src));
+    if constexpr (Bytes == 4) store_vec(smem_dst, load_vec<unsigned>(gmem_src));
+#else
     if constexpr (Policy == Cache::cg) {
         static_assert(Bytes == 16, "cp.async.cg requires a 16-byte copy");
         asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n"
@@ -22,6 +30,7 @@ __device__ __forceinline__ void cp_async(void* smem_dst, const void* gmem_src) {
                      :
                      : "r"(smem_addr(smem_dst)), "l"(gmem_src), "n"(Bytes));
     }
+#endif
 }
 
 template <int Bytes, Cache Policy = Cache::ca>
@@ -29,6 +38,14 @@ __device__ __forceinline__ void cp_async_zfill(void* smem_dst, const void* gmem_
                                                int src_bytes) {
     static_assert(Bytes == 4 || Bytes == 8 || Bytes == 16,
                   "cp_async_zfill supports 4, 8, or 16 bytes");
+    static_assert(Policy != Cache::cg || Bytes == 16, "cp.async.cg requires a 16-byte copy");
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    if (src_bytes == Bytes) return cp_async<Bytes, Policy>(smem_dst, gmem_src);
+    auto* dst = static_cast<unsigned char*>(smem_dst);
+    const auto* src = static_cast<const unsigned char*>(gmem_src);
+#pragma unroll
+    for (int i = 0; i < Bytes; ++i) dst[i] = i < src_bytes ? src[i] : 0;
+#else
     if constexpr (Policy == Cache::cg) {
         static_assert(Bytes == 16, "cp.async.cg requires a 16-byte copy");
         asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
@@ -39,11 +56,16 @@ __device__ __forceinline__ void cp_async_zfill(void* smem_dst, const void* gmem_
                      :
                      : "r"(smem_addr(smem_dst)), "l"(gmem_src), "n"(Bytes), "r"(src_bytes));
     }
+#endif
 }
 
 template <Cache Policy>
 __device__ __forceinline__ void cp_async_cache_hint(void* destination, const void* source,
                                                     int valid_bytes, std::uint64_t policy) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    (void)policy;
+    cp_async_zfill<16, Policy>(destination, source, valid_bytes);
+#else
     if constexpr (Policy == Cache::cg) {
         asm volatile("cp.async.cg.shared.global.L2::cache_hint [%0], [%1], 16, %2, %3;"
                      :
@@ -53,14 +75,25 @@ __device__ __forceinline__ void cp_async_cache_hint(void* destination, const voi
                      :
                      : "r"(smem_addr(destination)), "l"(source), "r"(valid_bytes), "l"(policy));
     }
+#endif
 }
 
-__device__ __forceinline__ void cp_commit() { asm volatile("cp.async.commit_group;\n"); }
+__device__ __forceinline__ void cp_commit() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    asm volatile("" ::: "memory");
+#else
+    asm volatile("cp.async.commit_group;\n");
+#endif
+}
 
 template <int Groups>
 __device__ __forceinline__ void cp_wait() {
     static_assert(Groups >= 0 && Groups <= 7, "cp_wait group count must fit the PTX immediate");
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    asm volatile("" ::: "memory");
+#else
     asm volatile("cp.async.wait_group %0;\n" : : "n"(Groups));
+#endif
 }
 
 template <int Bytes>

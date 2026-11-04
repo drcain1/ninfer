@@ -11,7 +11,7 @@ foreach(part IN ITEMS system task_pool)
   set_tests_properties(ninfer_cpu_${part}_test PROPERTIES TIMEOUT 30)
 endforeach()
 
-if(NINFER_TARGET STREQUAL "rtx5090")
+if(NINFER_TARGET STREQUAL "rtx5090" OR NINFER_TARGET STREQUAL "v100")
   foreach(part IN ITEMS x86 executor)
     ninfer_add_test(ninfer_cpu_${part}_test
       SOURCES "${CMAKE_CURRENT_LIST_DIR}/../cpu/test_${part}.cpp"

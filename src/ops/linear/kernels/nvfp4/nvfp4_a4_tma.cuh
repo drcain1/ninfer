@@ -1,4 +1,5 @@
 #pragma once
+#include "core/platform.h"
 
 #include "ops/common/cuda/pipeline.cuh"
 #include "ops/common/cuda/memory.cuh"
@@ -361,6 +362,10 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_a4_t
 template <class Schedule, class Output, class Epilogue, class Rows = Nvfp4IdentityRows>
 void launch_nvfp4_a4_tma_mma(const Nvfp4A4Operands& p, Output output, Epilogue epilogue,
                              cudaStream_t stream, Rows = {}) {
+#if NINFER_TARGET_V100
+    throw std::invalid_argument("NVFP4 TMA is unavailable on V100; select a non-TMA schedule");
+#else
+
     validate_nvfp4_operands<Schedule>(p);
     static_assert(
         Rows::kContiguous ||
@@ -391,5 +396,6 @@ void launch_nvfp4_a4_tma_mma(const Nvfp4A4Operands& p, Output output, Epilogue e
                                                             offset + count, p.rows, p.k, offset);
         CUDA_CHECK(cudaGetLastError());
     });
+#endif
 }
 } // namespace ninfer::ops::detail

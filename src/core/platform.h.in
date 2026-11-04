@@ -5,13 +5,10 @@
 #cmakedefine01 NINFER_TARGET_V100
 
 // Capabilities belong to each target; consumers should use the capability they need.
-#if NINFER_TARGET_RTX5090
+#if NINFER_TARGET_RTX5090 || NINFER_TARGET_V100
 #    define NINFER_SHARED_PHYSICAL_MEMORY 0
 #    define NINFER_EXPERT_OFFLOAD 1
 #elif NINFER_TARGET_SPARK
 #    define NINFER_SHARED_PHYSICAL_MEMORY 1
-#    define NINFER_EXPERT_OFFLOAD 0
-#elif NINFER_TARGET_V100
-#    define NINFER_SHARED_PHYSICAL_MEMORY 0
 #    define NINFER_EXPERT_OFFLOAD 0
 #endif

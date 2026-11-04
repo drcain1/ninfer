@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/kernels/fp8/fp8_template_launch.cuh"
 #include "ops/linear/projection/fp8/fp8_shapes.h"
 #include "core/device.h"
@@ -55,6 +59,14 @@ void launch_tail(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    if (x.ne[1] > 4)
+        return launch_volta_linear<2, 32>(
+            fp8_a16_operands(x, weight),
+            LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n},
+            LinearIdentityEpilogue{}, stream);
+#endif
+
     if (x.ne[1] < 42) return launch_ksplit(x, weight, out, stream);
 
     const std::int32_t tokens = x.ne[1];

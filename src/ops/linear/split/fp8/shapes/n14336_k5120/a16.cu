@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear/split/fp8/shapes/n14336_k5120/launch.h"
 #include "ops/linear/kernels/fp8/fp8_template_launch.cuh"
 #include "core/weight.h"
@@ -67,6 +71,17 @@ void launch_matrix(const Tensor& x, const Weight& weight, std::span<const Tensor
 
 void launch_a16(const Tensor& x, const Weight& weight, std::span<const Tensor> outputs,
                 cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    if (x.ne[1] > 4)
+        return launch_volta_linear<2, 32>(fp8_a16_operands(x, weight),
+                                          LinearBf16SegmentedOutput<6144, 1024, 6144, 1024>{
+                                              static_cast<__nv_bfloat16*>(outputs[0].data),
+                                              static_cast<__nv_bfloat16*>(outputs[1].data),
+                                              static_cast<__nv_bfloat16*>(outputs[2].data),
+                                              static_cast<__nv_bfloat16*>(outputs[3].data)},
+                                          LinearIdentityEpilogue{}, stream);
+#endif
+
     if (x.ne[1] == 1)
         launch_decode(x, weight, outputs, stream);
     else if (x.ne[1] <= 32)

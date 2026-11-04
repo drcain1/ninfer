@@ -1,3 +1,4 @@
+#include "core/platform.h"
 // Non-RDC compilation is required for the producer/consumer register redistribution.
 #include "ops/softmax_attention/dense/causal_cache/nvfp4/tiled_launch.h"
 #include "ops/softmax_attention/dense/causal_cache/nvfp4/instances.h"
@@ -6,9 +7,14 @@
 namespace ninfer::ops::detail {
 void nvfp4_kv_tiled_attention(const CausalAttentionOperands& p, Nvfp4KvReadView cache,
                               cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    throw std::invalid_argument("V100 NVFP4 KV requires the grouped attention schedule");
+#else
+
     if (p.query_heads == 24)
         launch_nvfp4_kv_tiled_mma<CausalD256H24Kv4, Nvfp4KvTiledInstance>(p, cache, stream);
     else
         launch_nvfp4_kv_tiled_mma<CausalD256H16Kv2, Nvfp4KvTiledInstance>(p, cache, stream);
+#endif
 }
 } // namespace ninfer::ops::detail

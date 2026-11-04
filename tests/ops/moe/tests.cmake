@@ -7,7 +7,7 @@ ninfer_add_op_test(ninfer_moe_test
           "${CMAKE_CURRENT_LIST_DIR}/test_routed.cpp"
   LIBRARIES ninfer_ops)
 
-if(NINFER_TARGET STREQUAL "rtx5090")
+if(NINFER_TARGET STREQUAL "rtx5090" OR NINFER_TARGET STREQUAL "v100")
   ninfer_add_op_test(ninfer_moe_mixed_test
     SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_mixed.cpp"
             "${CMAKE_CURRENT_LIST_DIR}/fixture.cpp"

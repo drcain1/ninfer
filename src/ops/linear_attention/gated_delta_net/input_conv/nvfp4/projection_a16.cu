@@ -1,3 +1,7 @@
+#include "core/platform.h"
+#if NINFER_TARGET_V100
+#    include "ops/linear/kernels/volta/tiled.cuh"
+#endif
 #include "ops/linear_attention/gated_delta_net/input_conv/nvfp4/launch.h"
 #include "ops/linear/kernels/nvfp4/nvfp4_template_launch.cuh"
 #include "ops/linear/kernels/nvfp4/nvfp4_instances.cuh"
@@ -42,6 +46,15 @@ Launcher select_projection(int tokens) {
 
 void launch_nvfp4_gdn_input_a16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                                 cudaStream_t stream) {
+#if NINFER_TARGET_V100
+    if (x.ne[1] > 4)
+        return launch_volta_linear<2, 32>(
+            nvfp4_a16_operands(x, weight),
+            LinearBf16SegmentedOutput<10240, 6144>{static_cast<__nv_bfloat16*>(qkv.data),
+                                                   static_cast<__nv_bfloat16*>(z.data)},
+            LinearIdentityEpilogue{}, stream);
+#endif
+
     select_projection(x.ne[1])(x, weight, qkv, z, stream);
 }
 } // namespace ninfer::ops::detail
