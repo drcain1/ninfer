@@ -304,7 +304,11 @@ void launch_flash_block(const float* q_f32, const half* k_f16, const half* v_f16
     const int raw     = std::min(max_blocks, ntiles_KV * ntiles_dst);
     const int rounded = (raw / ntiles_dst) * ntiles_dst;
     const int loss    = rounded > 0 ? 100 * (raw - rounded) / raw : 100;
-    const int nblocks = loss <= 5 ? rounded : raw;
+    // Once output tiles can fill the device, let each CTA own one complete tile.
+    // Splitting those tiles over a persistent grid adds partial-result writes and
+    // fixup work, and balances padded rather than causally visible keys. Retain
+    // stream-K for small query tails that need key partitions to fill the device.
+    const int nblocks = ntiles_dst >= max_blocks ? ntiles_dst : (loss <= 5 ? rounded : raw);
 
     const dim3 block_dim(WARP_SIZE, c.nwarps, 1);
     const dim3 blocks_num(nblocks, 1, 1);

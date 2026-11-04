@@ -33,7 +33,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/qsa/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/kpool_mla/sources.cmake")
 
 if(NINFER_TARGET STREQUAL "v100")
-  target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/dense/causal_cache/volta/flash.cu")
+  # Keep the self-contained Volta attention mainloop's register allocation local.
+  target_sources(ninfer_ops_non_rdc PRIVATE "${CMAKE_CURRENT_LIST_DIR}/dense/causal_cache/volta/flash.cu")
   set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/dense/causal_cache/volta/flash.cu" PROPERTIES
     INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/third_party/llama_cpp_fattn"
     COMPILE_OPTIONS "--extended-lambda")
