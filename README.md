@@ -1,258 +1,128 @@
-# NInfer
+# NInfer Volta — full upstream V100 port
 
-> Native C++/CUDA inference for selected models on RTX 5090 and DGX Spark.
+Native C++/CUDA inference for NVIDIA Tesla V100, built on the newer [NInfer](https://github.com/Neroued/ninfer) engine architecture. This fork keeps Volta hardware useful for local LLM serving while bringing it forward from the older V100 engine.
 
-NInfer runs text and image/video generation through a local CLI or OpenAI- and
-Anthropic-compatible HTTP APIs. It supports single-device execution and model-parallel execution
-across two DGX Sparks, with CUDA Graph decode, speculative decoding, and shared-prefix caching.
-One Engine serves one model with up to eight active requests.
+## Why this fork exists
 
-## Supported models and deployments
+The working V100 fork had fallen hundreds of commits behind upstream. Upstream had replaced substantial parts of the engine and targeted RTX 5090 and DGX Spark; merging those changes alone did not produce a working `sm_70` engine. We kept a conservative reliability build for daily use, then ported the newer architecture and optimized its actual V100 execution paths.
 
-| Model | Architecture | Deployment | Speculative backends |
-|---|---|---|---|
-| Qwen3.6-27B / Qwen3.8-27B | Qwen3.5 Dense | RTX 5090 | MTP; DFlash2 for Qwen3.8-27B with companion weights |
-| Qwen3.6-35B-A3B | Qwen3.5 MoE | RTX 5090, resident or CPU expert offload | MTP or DFlash with companion weights |
-| Qwen3.8-Flash-Next | Qwen4Exp | RTX 5090 with CPU expert offload; one or two Sparks | MTP |
-| GLM-5.3-Flash | GLM5Next | Two Sparks | MTP |
+Both tracks live in **[drcain1/ninfer-volta](https://github.com/drcain1/ninfer-volta)**:
 
-All rows support text, Vision, tools, constrained output, and offline perplexity scoring.
-Vision and speculative decoding require the corresponding components in the artifact and must be
-enabled at startup. Scoring loads Text only. CPU expert offload applies to the RTX 5090 target;
-Spark execution keeps selected weights on the GPU. Flash Next offload also needs substantial system
-RAM for expert weights; see the [CLI guide](docs/cli.md#cpu-expert-offload).
+| Branch | Purpose | Validation baseline |
+| --- | --- | --- |
+| [`port/upstream-v100-20261103`](https://github.com/drcain1/ninfer-volta/tree/port/upstream-v100-20261103) — this branch | Full upstream engine with native Volta support and performance work | Inference commit `f4e186aa`, based on upstream `a754fcf3` |
+| [`backport/upstream-reliability-20261103`](https://github.com/drcain1/ninfer-volta/tree/backport/upstream-reliability-20261103) | Older working V100 engine with selected upstream reliability fixes | Inference commit `bc3f1be2` |
 
-Dual-Spark Flash Next uses TP2, optionally with EP2. GLM uses TP2 plus attention DP2, optionally
-with EP2. The [deployment guide](docs/startup-configuration.md#distributed-deployment) explains
-these settings and worker startup. [Example configurations](examples/configs/) cover the common
-deployments, including Vision, FP8 KV, MTP3 and the optimized draft head.
+These are separate engine generations with different configuration flags. The revisions above identify the tested inference code; later documentation commits do not change those binaries. As of the November 5, 2026 qualification, the full port is packaged and validated, while the reliability build remains deployed on the reference host.
 
-## Build
+## What the port does
 
-Build natively on Linux: x86-64 / `sm_120a` for RTX 5090, AArch64 / `sm_121a` for DGX Spark.
-Dependencies are a CUDA toolkit supporting the target, CMake 3.28+, a C++20 host compiler,
-Ninja, `pkg-config`, libjpeg development headers, FFmpeg development libraries
-(`libavformat`, `libavcodec`, `libavutil`, `libswscale`), `hwloc >= 2.5`, `liburing >= 2.5`,
-and `libcurl >= 7.85`. CUDA 13.4 is the development toolkit; CMake checks the requested architecture.
+- Runs the newer upstream engine, serving APIs, context scheduler, and prefix-cache restoration on Volta (`sm_70`).
+- Adds native FP16 Volta tensor-core paths, FP32 accumulation where required by the kernels, and software handling of packed NVFP4/FP8 weights. V100 does not gain hardware FP4, FP8, or BF16 tensor cores.
+- Provides lossless Volta weight-layout packing, optimized packed linear and GDN projections, and an optimized MTP proposal head.
+- Accelerates INT8-KV prefill by computing all 256 value dimensions in one pass and scheduling the full query batch together. The large-value fallback remains in place.
+- Reduces kernel spills and CUDA module memory, and preserves long-conversation prefix reuse under the tested host-cache budget.
 
-```bash
-git clone https://github.com/Neroued/ninfer.git
-cd ninfer
-cmake --preset rtx5090-release
-cmake --build build/rtx5090-release -j
-```
+The public products remain `.ninfer` model artifacts, a CLI, an OpenAI/Anthropic-compatible server, and perplexity tooling. There is no Python model-inference runtime.
 
-For a single Spark, use `dgx-spark-release` and `build/dgx-spark-release`.
-For two Sparks, install NCCL development headers and libraries and build on **both nodes**:
+## Target and qualified configuration
+
+The qualified machine is a **Tesla V100 PCIe 32 GB**, Linux x86_64, with approximately **31 GiB host RAM**. Builds used **CUDA 12.8.1 and GCC 13**. The V100 target accepts CUDA 12.8/12.9; CUDA 13 removes `sm_70` compilation support.
+
+End-to-end validation used **Swift 1.5 Qwen3.8 27B OrcaRouter NVFP4**, with a losslessly repacked artifact, **MTP with four draft tokens**, INT8 KV, CUDA graphs, 2,048-token prefill chunks, two execution lanes, and a 200,000-token context limit. `qwen3.8-27b` is the serving alias. Although the source artifact includes DFlash2 weights, the performance results below use MTP.
+
+The broader upstream model implementations remain in the tree. Their presence is not a claim of V100 qualification. V100 16 GB, other Volta cards, arbitrary model families, and 232K+ contexts have not been qualified by this campaign.
+
+## Build and run
+
+Use CMake 3.28+, Ninja, a C++20 compiler, and CUDA 12.8 or 12.9. Install the development dependencies described in the [build-system guide](docs/maintainer/build-system.md), including libcurl, liburing, hwloc, JPEG, and FFmpeg. Select the V100 preset explicitly; upstream GPU recipes use different toolchains.
 
 ```bash
-cmake --preset dgx-spark-release -DNINFER_ENABLE_DISTRIBUTED=ON
-cmake --build build/dgx-spark-release -j
+git clone --branch port/upstream-v100-20261103 https://github.com/drcain1/ninfer-volta.git
+cd ninfer-volta
+cmake --preset v100-release \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc \
+  -DNINFER_ENABLE_DISTRIBUTED=OFF
+cmake --build --preset v100-release --parallel 4
 ```
 
-Product binaries are `apps/ninfer`, `apps/ninfer-serve`, `apps/ninfer-perplexity`, and, with
-distributed execution enabled, `apps/ninfer-worker`. Run them from the build tree; keep its `lib/`
-directory alongside `apps/` when moving outputs. There is no installed C++ SDK.
+Adjust the CUDA path for your installation. The products are under `build/v100-release/apps/`; retain the accompanying `lib/` directory when packaging. `v100-core` builds only Core/Artifact validation and does **not** build the inference engine. Use `v100-dev` to enable tests; see the [test guide](tests/README.md) for selecting suites.
 
-Product presets omit tests and benchmarks. The `rtx5090-dev` / `dgx-spark-dev` presets enable
-both; the corresponding `-ops` presets build only the lower-level libraries and their checks.
-See [build organization](docs/maintainer/build-system.md) for development options.
-
-## Get weights
-
-The Engine reads v3 `.ninfer` artifacts containing weights, configuration, tokenizer, chat template,
-and component resources. These official downloads are available:
-
-| Model | Weights | Artifact | Download and model card |
-|---|---|---|---|
-| Qwen3.6-27B | `groupwise-int` | `qwen3_6_27b.ninfer` | [Qwen3.6-27B](https://huggingface.co/neroued/Qwen3.6-27B-NInfer) |
-| Qwen3.6-27B | `nvfp4` | `qwen3_6_27b_nvfp4.ninfer` | [Qwen3.6-27B NVFP4](https://huggingface.co/neroued/Qwen3.6-27B-nvfp4-NInfer) |
-| Qwen3.8-27B | `groupwise-int` | `qwen3_8_27b.ninfer` | [Qwen3.8-27B](https://huggingface.co/neroued/Qwen3.8-27B-NInfer) |
-| Qwen3.8-27B | `nvfp4` | `qwen3_8_27b_nvfp4.ninfer` | [Qwen3.8-27B NVFP4](https://huggingface.co/neroued/Qwen3.8-27B-nvfp4-NInfer) |
-| Qwen3.6-35B-A3B | `groupwise-int` | `qwen3_6_35b_a3b.ninfer` | [Qwen3.6-35B-A3B](https://huggingface.co/neroued/Qwen3.6-35B-A3B-NInfer) |
-| Qwen3.8-Flash-Next | Mixed NVFP4/Q8/NF4 | `qwen3_8_flash_next.ninfer` + 3 parts | [Qwen3.8-Flash-Next](https://huggingface.co/neroued/Qwen3.8-Flash-Next-NInfer) |
-| GLM-5.3-Flash | Mixed NVFP4/Q8 | `glm5_3_flash.ninfer` + 5 parts | [GLM-5.3-Flash](https://huggingface.co/neroued/GLM-5.3-Flash-NInfer) |
+The newer engine needs its v3 artifact schema and bindings. Do not assume that an older `.ninfer` file is compatible just because its filename or version looks similar. See [weight conversion](docs/weight-conversion.md); the [v2 upgrade tool](tools/upgrade_ninfer_v2_to_v3.py) handles its explicitly recognized inputs. For a compatible v3 artifact, pack the Volta weight layout from the repository root:
 
 ```bash
-hf download neroued/Qwen3.8-27B-nvfp4-NInfer \
-  qwen3_8_27b_nvfp4.ninfer --local-dir models
+python3 -m tools.artifact.pack_volta model-v3.ninfer model-volta-v3.ninfer
 ```
 
-Download Flash Next or GLM with all their storage parts:
+This changes the layout of supported packed weights, not their represented values; it does not quantize a new model. The qualification artifact was checked for exact represented-weight preservation.
+
+The tested compute/cache profile, with an example loopback listener:
 
 ```bash
-hf download neroued/Qwen3.8-Flash-Next-NInfer \
-  --include 'qwen3_8_flash_next.ninfer*' \
-  --local-dir models/Qwen3.8-Flash-Next-NInfer
-
-hf download neroued/GLM-5.3-Flash-NInfer \
-  --include 'glm5_3_flash.ninfer*' \
-  --local-dir models/GLM-5.3-Flash-NInfer
+./build/v100-release/apps/ninfer-serve /path/to/model-volta-v3.ninfer \
+  --host 127.0.0.1 --port 8080 --model-id qwen3.8-27b \
+  --max-context 200000 --context-capacity auto --kv-dtype int8 \
+  --prefill-chunk 2048 --max-concurrency 2 \
+  --host-cache-capacity 9221505024B --prefix-reuse \
+  --cuda-graph --spec mtp --draft-tokens 4 --proposal-head optimized \
+  --preserve-thinking --vision
 ```
 
-Flash Next uses 101.00 GiB across four files; GLM uses 178.33 GiB across six. Keep every part beside
-the entry file and pass only the entry path to NInfer. For two Sparks, place the complete set on each
-node; rank-specific slicing happens during loading. The model cards describe their mixed precision,
-components and deployment options.
+The host cache is **8.59 GiB**; it is not a cap on total process or system memory. Upstream's `io_uring` I/O path needs kernel support and permission to create its rings. The tested host uses the stock AlmaLinux/RHEL-derived `6.12.0-211.65.1.el10_2.x86_64` kernel with `kernel.io_uring_disabled=0`; no custom kernel was needed. Container syscall policy and locked-memory limits must also permit the runtime's operations.
 
-For custom weights, follow [weight conversion](docs/weight-conversion.md). Older v2 files can be
-[upgraded locally](docs/weight-conversion.md#upgrade-an-existing-v2-artifact).
+See [CLI](docs/cli.md), [serving](docs/serving.md), and [startup configuration](docs/startup-configuration.md) for the newer engine's options. The reliability branch's `--host-kv-mib`, state-slot flags, and `--lm-head-draft` are not this branch's configuration recipe.
 
-## Run
+## What we tested
 
-Run one request on RTX 5090:
+Qualification at `f4e186aa` on November 5, 2026 includes:
 
-```bash
-./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
-  --prompt "Explain prefill and decode briefly." \
-  --max-context 8192 --max-tokens 1024 --kv-dtype fp8
-```
+| Check | Result / coverage |
+| --- | --- |
+| Independent-reference INT8 attention | 220 cases passed, no skips; includes FP64-reference 150K history, graph updates, route boundaries, large values, masked tails, and unordered positions |
+| CUDA Compute Sanitizer | memcheck, synccheck, and racecheck: three focused production cases each, no reported errors or hazards |
+| MTP state correctness | Independent Main-conditioning oracle: 21 KV checks in eager mode and 21 with CUDA graphs |
+| Serving regression | 16 API checks, upstream HTTP contract checks, and eight concurrent arithmetic checks passed |
+| Packaged image | Binary identity, health endpoint, and a real MTP arithmetic request passed |
+| Long-context replay | 49 requests per build, 21 main continuations, final prompt 180,210 tokens; labels and token counts matched |
 
-Answer content goes to stdout; reasoning, startup information and the result report go to stderr.
-Use `--messages FILE` and `--vision` for image/video input. See the [CLI guide](docs/cli.md).
+Numerical correctness is established by independent references, rather than by whether generated text looks plausible. Earlier port validation also covered 950 linear, 180 GDN, and 140 mixed-attention cases. Those earlier suites were not all rerun for the final attention-only change.
 
-For a persistent service, edit a deployment example and launch it:
+**Known failures:** the earlier broad GPU sweep found seven pre-existing failures, also reproduced on the preceding port baseline: five QSA sparse-GQA formats, block-scaled MoE, and expert-parallel MoE (`cudaFuncSetAttribute` invalid-value failures). These are outside the qualified Qwen dense/GDN/MTP path and were not rerun for the final attention-only change. This is not a claim that the entire upstream test suite passes on V100.
 
-```bash
-cp examples/configs/rtx5090-qwen3_8-27b-nvfp4.toml ninfer.local.toml
-# Edit model.path for your artifact.
-./build/rtx5090-release/apps/ninfer-serve --config ninfer.local.toml
-```
+## Performance and host memory
 
-The example enables Vision, FP8 KV, MTP3 and the optimized draft head. It sets a per-request
-context limit of 240,000 tokens; the actual shared KV/State capacity depends on available memory.
-The startup log reports the Context pool size and an estimated token capacity.
+The [recorded qualification report](docs/validation/2026-11-05/REPORT.txt) compares the final port with the reliability build. Both used MTP4, INT8 KV, CUDA graphs, the same model weights, and the context/chunk/concurrency settings above. The reliability profile used 4 GiB host KV plus 32 host-state slots; the newer engine used its 8.59 GiB host cache.
 
-```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Hello!"}],"max_tokens":1024}'
-```
+| Fresh long-context replay | Full port | Reliability |
+| --- | ---: | ---: |
+| Cold 150K time to first token | 348.645 s | 338.918 s |
+| Warm 150K–180K median time to first token | 6.858 s | 7.223 s |
+| Warm maximum time to first token | 7.280 s | 7.779 s |
+| Peak process RSS | 9.821 GiB | 10.142 GiB |
+| Minimum host memory available | 4.048 GiB | 3.732 GiB |
+| Process swap | 0 KiB | 0 KiB |
 
-The server defaults to loopback. For LAN access, set `server.host = "0.0.0.0"` and configure
-`server.api_key` as needed. The [Serve guide](docs/serving.md) covers endpoints, tools,
-structured output, streaming, metrics, and request logs.
+The port was 2.87% slower on the cold 150K prompt and 5.05% faster on median warm continuations. Every main continuation reused its prefix, with strictly advancing prefixes and no cache-loss multi-minute warm stalls in this replay. **Cold 150K prefill still takes nearly six minutes.** The 200K setting is a configured limit; successful replay through 180K does not establish full 200K concurrency or 232K+ support.
 
-Both programs accept `--config FILE`; explicit command-line values override it. The root
-[ninfer.example.toml](ninfer.example.toml) lists every field, while
-[deployment examples](examples/configs/) provide focused starting points.
-[Startup configuration](docs/startup-configuration.md) explains defaults, resource controls,
-and distributed launch. Personal TOML files are ignored by Git.
+This was one sequential replay per build, with matched initial-temperature limits and dynamic GPU clocks. Active temperatures and clocks differed, so the small differences should not be treated as fixed-clock kernel comparisons. The port stayed within this host's measured memory budget. System-wide swapout increased by 775 pages during its run (zero during reliability); neither server process swapped.
 
-## Context and prefix reuse
+Short-workload measurements used three sequential repetitions and two concurrent pairs, compared with the **prior short-workload reliability baseline**, not the fresh long-context replay:
 
-`max_context` limits a request's input plus generated tokens. `context_capacity` controls a separate,
-startup-sized byte pool on each rank, shared by growing KV histories and continuation state.
-With `auto`, the pool uses the available budget after weights and execution resources are planned.
-It is not multiplied by concurrency, and a logical context limit does not guarantee that every
-active request can simultaneously reach that length.
+| Workload / server-reported rate | Full port | Reliability |
+| --- | ---: | ---: |
+| 2,293-token prefill | 942.51 tok/s | 907.00 tok/s |
+| 9,169-token prefill | 978.26 tok/s | 935.66 tok/s |
+| Decode after 61-token prompt | 58.74 tok/s | 56.39 tok/s |
+| Decode after 2,293-token prompt | 58.39 tok/s | 51.81 tok/s |
+| Decode after 9,169-token prompt | 61.39 tok/s | 61.43 tok/s |
+| Two-request aggregate generation | 81.05 tok/s | 67.68 tok/s |
 
-Serve retains exact text and multimodal prefixes, including the state needed to continue them.
-Memory pressure can reclaim cached prefixes or pause active requests for later restoration/replay.
-RTX 5090 can also retain context in pinned Host memory; Spark uses Device context storage.
-See [resource controls](docs/startup-configuration.md#context-and-memory) for tuning.
+These measurements qualify this model and configuration, not every production workload or a general MTP-versus-DFlash2 comparison. Inherited upstream benchmark tables in other guides describe their original hardware and are not measurements of this fork.
 
-## Performance
+## Lineage and maintenance
 
-These recorded campaigns used an RTX 5090 and the engine version identified by each result page. The [performance index](docs/performance.md) links to
-per-model run records and the [measurement rules](docs/performance/methodology.md). The tables
-below are excerpts from those detailed results. Those campaigns used FP8 E4M3 row-256 KV for Qwen3.8
-and INT8 group-64 KV for Qwen3.6.
-The measurements retain their original cache formats and resource settings; they are not measurements
-of the current Spark or distributed paths.
+This branch preserves upstream history through `a754fcf3`, then adds the V100 platform, kernels, and optimizations. Future upstream updates can be merged normally, but CUDA/platform assumptions, changed Ops, artifact bindings, scheduler behavior, and serving contracts still need V100 validation. It is not a promise of conflict-free or automatic upstream compatibility.
 
-### Concurrent MTP3 decode
+Credit goes to [Neroued/NInfer](https://github.com/Neroued/ninfer), [geoffwatts/ninfer-v100](https://github.com/geoffwatts/ninfer-v100), and [liujun-7788/ninfer-v3-v100](https://github.com/liujun-7788/ninfer-v3-v100). Kernel and packing work also draws on Infernix and ninfer-all; exact provenance and retained third-party licensing are recorded in [the Volta notice](third_party/volta/NOTICE).
 
-Saturated decode used CUDA Graphs, MTP3, and one 8,192-token generation per active
-request. Throughput uses aggregate committed decode tokens from complete intervals whose actual
-decode batch equaled the configured concurrency. Acceptance covers the complete request wave;
-these rates are steady decode (tok/s).
-
-| Model profile | C=1 tok/s / accept | C=2 tok/s / accept | C=4 tok/s / accept | C=8 tok/s / accept |
-|---|---:|---:|---:|---:|
-| [Qwen3.6-27B](docs/performance/qwen3.6-27b.md#decode-saturation) `groupwise-int` | 185.8 / 68.2% | 247.0 / 69.0% | 309.5 / 68.4% | 535.0 / 68.3% |
-| [Qwen3.6-27B](docs/performance/qwen3.6-27b.md#decode-saturation) `nvfp4` | 202.4 / 69.3% | 399.7 / 71.4% | 699.7 / 69.3% | 1,146.9 / 68.6% |
-| [Qwen3.6-35B-A3B](docs/performance/qwen3.6-35b-a3b.md#decode-saturation) `groupwise-int` | 642.5 / 68.6% | 907.2 / 66.3% | 1,213.5 / 69.6% | 1,380.7 / 68.0% |
-| [Qwen3.8-27B](docs/performance/qwen3.8-27b.md#decode-saturation) `groupwise-int` | 136.5 / 44.4% | 253.3 / 45.2% | 398.1 / 46.1% | 582.4 / 46.4% |
-| [Qwen3.8-27B](docs/performance/qwen3.8-27b.md#decode-saturation) `nvfp4` | 147.7 / 46.2% | 291.0 / 48.7% | 522.2 / 45.8% | 922.4 / 46.1% |
-
-### Single-request serving
-
-The serial serving corpus used CUDA Graphs, a 1,024-token prefill chunk, and five
-fixed seeds after warm-up. The table keeps one short-prefill, one extreme-prefill, and one
-structured-output MTP3 point for each published profile; the full context and scenario matrices are
-linked from each model below.
-
-| Model profile | 7,680-token prefill | 260,096-token prefill | Structured MTP3 decode |
-|---|---:|---:|---:|
-| [Qwen3.6-35B-A3B](docs/performance/qwen3.6-35b-a3b.md#single-request-speculative-decode) `groupwise-int` | 17,705.4 tok/s | 5,247.0 tok/s | 779.6 tok/s |
-| [Qwen3.6-27B](docs/performance/qwen3.6-27b.md#single-request-speculative-decode) `groupwise-int` | 3,218.1 tok/s | 1,614.8 tok/s | 193.0 tok/s |
-| [Qwen3.6-27B](docs/performance/qwen3.6-27b.md#single-request-speculative-decode) `nvfp4` | 11,191.5 tok/s | 2,510.6 tok/s | 252.2 tok/s |
-| [Qwen3.8-27B](docs/performance/qwen3.8-27b.md#single-request-speculative-decode) `groupwise-int` | 3,331.9 tok/s | 2,139.4 tok/s | 214.7 tok/s |
-| [Qwen3.8-27B](docs/performance/qwen3.8-27b.md#single-request-speculative-decode) `nvfp4` | 12,819.1 tok/s | 4,016.4 tok/s | 231.7 tok/s |
-
-## Evaluation
-
-The 27B/35B capability scores below were measured through NInfer's OpenAI-compatible serving route with thinking
-enabled, MTP3, and EvalScope 1.9.0 (0-shot, rule scoring, one sample per problem):
-
-| Model profile | AIME 2025 | AIME 2026 | GPQA-Diamond | ERQA | RealWorldQA |
-|---|---:|---:|---:|---:|---:|
-| [Qwen3.6-27B groupwise-int](model-cards/Qwen3.6-27B-NInfer/README.md) | 86.67% | 93.33% | 86.87% | — | — |
-| [Qwen3.6-27B NVFP4](model-cards/Qwen3.6-27B-nvfp4-NInfer/README.md) | 93.33% | 93.33% | 84.34% | — | — |
-| [Qwen3.6-35B-A3B groupwise-int](model-cards/Qwen3.6-35B-A3B-NInfer/README.md) | 90.00% | 90.00% | 85.35% | — | — |
-| [Qwen3.8-27B groupwise-int](model-cards/Qwen3.8-27B-NInfer/README.md) | 96.67% | 96.67% | 87.37% | 66.25% | 82.22% |
-| [Qwen3.8-27B NVFP4](model-cards/Qwen3.8-27B-nvfp4-NInfer/README.md) | 96.67% | 96.67% | 90.40% | 66.25% | 83.53% |
-
-The Qwen3.6 rows used temperature 0.6 and presence penalty 1.0; the Qwen3.8 rows used temperature
-1.0 and presence penalty 0.0. Multimodal evaluation used `--vision` and an 81,920-token context
-limit. Text evaluation used 262,144 tokens except Qwen3.8-27B NVFP4, which used 252,928 tokens to
-fit the RTX 5090 after weights. Each score is one sample per problem; model cards contain the
-correct/total counts and evaluation notes.
-
-[Flash Next](model-cards/Qwen3.8-Flash-Next-NInfer/README.md#evaluation) was evaluated separately on
-two Sparks with TP2/EP2, BF16 KV, Vision, MTP3, optimized draft head and EvalScope 1.10.0:
-
-| Benchmark | Accuracy | Correct / scored samples | Repeats per question |
-|---|---:|---:|---:|
-| GPQA-Diamond | 91.79% | 727 / 792 | 4 |
-| AIME 2026 | 97.78% | 88 / 90 | 3 |
-| ERQA | 68.00% | 272 / 400 | 1 |
-| RealWorldQA | 85.75% | 656 / 765 | 1 |
-| MMMU-Pro, standard 10 options | 80.81% | 1,398 / 1,730 | 1 |
-
-These are mean sample accuracies, not pass@k. The card records the generation settings and includes
-the truncated/unparsed samples in the totals. Vision scores retain the original campaign's decoder
-and scoring behavior.
-
-## Docker
-
-The included Dockerfile builds the RTX 5090 CLI and server. It requires the NVIDIA Container Toolkit
-on the host:
-
-```bash
-docker build --tag ninfer:local .
-docker run --rm --gpus '"device=0"' --publish 8080:8080 \
-  --volume "$PWD/models:/models:ro" ninfer:local \
-  ninfer-serve /models/qwen3_8_27b_nvfp4.ninfer \
-  --host 0.0.0.0 --max-context 8192 --kv-dtype fp8
-```
-
-## Documentation
-
-- [Deployment configurations](examples/configs/) and [startup parameters](docs/startup-configuration.md)
-- [CLI](docs/cli.md), [HTTP serving](docs/serving.md), and [perplexity](docs/perplexity.md)
-- [Weight conversion](docs/weight-conversion.md)
-- [Recorded performance](docs/performance.md), [benchmarks](bench/README.md), and [evaluation](eval/README.md)
-- [Documentation index](docs/README.md) and [contributing](CONTRIBUTING.md)
-
-## License
-
-NInfer is licensed under the [Apache License 2.0](LICENSE).
-
-The 27B and 35B-A3B artifact sources use Apache-2.0, as recorded in their model cards.
-Flash Next combines the [Qwen Community License 1.0](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE)
-source with [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)
-weights. GLM's source weights use [MIT](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/LICENSE).
-Model licenses are separate from NInfer's software license. Vendored dependencies retain their own
-license files under `third_party/`.
+NInfer is licensed under [Apache 2.0](LICENSE), with the applicable third-party notices retained. See the [documentation index](docs/README.md) and [benchmark guide](bench/README.md) for further technical material.

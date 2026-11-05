@@ -1,0 +1,48 @@
+Full upstream V100 port: long-context latency qualification
+
+Commit: f4e186aa9365357e69ef26f052aef6d5cf6b4674
+Branch: port/upstream-v100-20261103
+Base: 0b46b98d. This is the full upstream architecture port with V100 support.
+Qualification passed: True
+Outstanding qualification checks: []
+Production remains reliability bc3f1be2; this release is not permanently deployed.
+
+The native Volta kernel computes all 256 value dimensions in one pass and schedules the whole query batch together. It retains FP32 scores, softmax and accumulation, the large-range fallback, and the existing small-query/16-head paths.
+Both builds: MTP with 4 draft tokens, INT8 KV, CUDA graphs, 2048-token prefill chunks, concurrency 2, 200000-token context limit.
+Candidate: optimized proposal head and 9221505024-byte (8.59 GiB) host cache. Reliability: 4 GiB host KV plus 32 state slots.
+Candidate performance uses the final linked library without an experimental preload.
+
+Fresh long-context comparison                Candidate     Reliability
+Cold 150K client TTFT (s)                     348.645         338.918
+Warm 150K–180K median TTFT (s)                  6.858           7.223
+Warm 150K–180K max TTFT (s)                     7.280           7.779
+Latency ratios (candidate/reliability): {'cold_ttft_client_s': 1.0287004429921747, 'warm_ttft_client_median_s': 0.9495186833781423, 'warm_ttft_client_max_s': 0.9357567944290431}
+Target: cold TTFT and warm median no more than 5% behind reliability, with correctness, cache preservation and host-memory budget retained.
+
+candidate: 49 requests, 21 main continuations, final prompt 180210 tokens.
+  Zero-reuse main continuations: []; prefixes strictly advance: True; maximum checkpoint lag: 11 tokens.
+  Peak process RSS: 9.821 GiB; process swap: 0 KiB; minimum host available: 4.048 GiB.
+  System swapout change: 775 pages. This measures the entire host, including unrelated processes.
+  Initial GPU temperature: 53.0 C; cooling target met: True; active temperature range: [54.0, 78.0] C; median active SM clock: 1230.0 MHz.
+reliability: 49 requests, 21 main continuations, final prompt 180210 tokens.
+  Zero-reuse main continuations: []; prefixes strictly advance: True; maximum checkpoint lag: 7 tokens.
+  Peak process RSS: 10.142 GiB; process swap: 0 KiB; minimum host available: 3.732 GiB.
+  System swapout change: 0 pages. This measures the entire host, including unrelated processes.
+  Initial GPU temperature: 55.0 C; cooling target met: True; active temperature range: [61.0, 81.0] C; median active SM clock: 1110.0 MHz.
+All request labels match: True; all prompt counts match: True; all completion counts match: True.
+This is one synthetic 49-request replay per build, run sequentially with matched initial temperature limits. It covers 150K through 180K; it does not qualify 232K+ or every production workload.
+
+Validation:
+- 220 independent-reference INT8 attention cases, including 150K history, graph updates, route boundaries, large values, masked tails, and unordered positions.
+- CUDA memcheck, synccheck and racecheck: 3 focused production cases each, no reported errors or hazards.
+- MTP independent Main-conditioning oracle: 21 KV checks in eager mode and 21 with CUDA graphs.
+- 16 API correctness checks, upstream HTTP contract, and 8 concurrent arithmetic checks.
+
+Short-workload results (candidate; reliability baseline from the prior short benchmark):
+short_decode: prefill 244.75/144.13 tokens/s; decode 58.74/56.39 tokens/s. Three repetitions.
+medium_prefill: prefill 942.51/907.00 tokens/s; decode 58.39/51.81 tokens/s. Three repetitions.
+long_prefill: prefill 978.26/935.66 tokens/s; decode 61.39/61.43 tokens/s. Three repetitions.
+Concurrent aggregate throughput: 81.05/67.68 tokens/s. Two concurrent pairs.
+Numerical correctness comes from independent references; matching generated text is not used as an arithmetic oracle.
+
+Known platform limitations: prior 0b46 validation found seven pre-existing QSA/MoE failures outside this Qwen3.8 dense/GDN/MTP path. Those suites were not rerun for this attention-only change.
