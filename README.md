@@ -31,7 +31,7 @@ The qualified machine is a **Tesla V100 PCIe 32 GB**, Linux x86_64, with approxi
 
 End-to-end validation used **Swift 1.5 Qwen3.8 27B OrcaRouter NVFP4**, with a losslessly repacked artifact, **MTP with four draft tokens**, INT8 KV, CUDA graphs, 2,048-token prefill chunks, two execution lanes, and a 200,000-token context limit. `qwen3.8-27b` is the serving alias. Although the source artifact includes DFlash2 weights, the performance results below use MTP.
 
-The broader upstream model implementations remain in the tree. Their presence is not a claim of V100 qualification. V100 16 GB, other Volta cards, arbitrary model families, and 232K+ contexts have not been qualified by this campaign.
+The broader upstream model implementations remain in the tree. Their presence is not a claim of V100 qualification. V100 16 GB, other Volta cards, and arbitrary model families have not been qualified by this campaign. A separate [232K context test](#232k-context-test) exercised one long conversation with smaller competing requests; contexts beyond 232,000 tokens remain unqualified.
 
 ## Build and run
 
@@ -102,7 +102,7 @@ The [recorded qualification report](docs/validation/2026-11-05/REPORT.txt) compa
 | Minimum host memory available | 4.048 GiB | 3.732 GiB |
 | Process swap | 0 KiB | 0 KiB |
 
-The port was 2.87% slower on the cold 150K prompt and 5.05% faster on median warm continuations. Every main continuation reused its prefix, with strictly advancing prefixes and no cache-loss multi-minute warm stalls in this replay. **Cold 150K prefill still takes nearly six minutes.** The 200K setting is a configured limit; successful replay through 180K does not establish full 200K concurrency or 232K+ support.
+The port was 2.87% slower on the cold 150K prompt and 5.05% faster on median warm continuations. Every main continuation reused its prefix, with strictly advancing prefixes and no cache-loss multi-minute warm stalls in this replay. **Cold 150K prefill still takes nearly six minutes.** The 200K setting is a configured limit; successful replay through 180K does not establish full 200K concurrency. The separate 232K test below covers a larger single conversation under a different workload.
 
 This was one sequential replay per build, with matched initial-temperature limits and dynamic GPU clocks. Active temperatures and clocks differed, so the small differences should not be treated as fixed-clock kernel comparisons. The port stayed within this host's measured memory budget. System-wide swapout increased by 775 pages during its run (zero during reliability); neither server process swapped.
 
@@ -118,6 +118,31 @@ Short-workload measurements used three sequential repetitions and two concurrent
 | Two-request aggregate generation | 81.05 tok/s | 67.68 tok/s |
 
 These measurements qualify this model and configuration, not every production workload or a general MTP-versus-DFlash2 comparison. Inherited upstream benchmark tables in other guides describe their original hardware and are not measurements of this fork.
+
+## 232K context test
+
+A separate [November 5 test report](docs/validation/2026-11-05/context232/REPORT.txt) evaluated a **232,000-token context limit** on the same V100 and inference binaries, retaining the **8.59 GiB host cache**, MTP4, INT8 KV, CUDA graphs, chunk size 2,048, and two lanes. **All 53 requests completed**, reaching a largest prompt of **231,892 tokens**, with room for generation below the total limit.
+
+The synthetic tool conversation included forced prefix edits, short approval requests, 12 rounds of competing conversations, recovery turns, and a separate 16K request overlapping the near-limit continuation. No long warm request lost its entire cached prefix, and no multi-minute warm-prefill stall, allocation failure, or service crash was observed.
+
+| Measurement | Result |
+| --- | ---: |
+| Cold 229,922-token prompt, time to first output | **700.86 s (11m 41s)** |
+| Sequential cached continuations, median / worst | **1.75 s / 8.31 s** |
+| Near-limit continuation alongside a 16K request | **24.85 s** |
+| Final exact repeat at 231,892 tokens | **7.15 s** |
+| Peak server RSS during monitored inference | **9.73 GiB** |
+| Minimum available host memory | **3.19 GiB** |
+| Server process swap | **0 KiB** |
+| Peak host-context occupancy / configured capacity | **8.45 / 8.59 GiB** |
+
+The host cache approached capacity. Some checkpoints temporarily stopped advancing, requiring up to **679 tokens** of suffix replay, including on the final exact repeat. This avoided full-history reprocessing but still added latency. The cold wait of almost 12 minutes is real; caching only avoids repeating it on subsequent turns. System-wide swapout increased by 161 pages (644 KiB), including unrelated processes, while the server itself did not swap.
+
+**Recommendation:** retain **200K as the default for predictable latency**. A **232K limit is usable for the tested single long conversation with smaller competing requests** when the additional context justifies the cold-prefill cost and occasional tens-of-seconds delay. The test restored production to **200,000 tokens**; it did not permanently raise the limit or host-cache budget. Reserve space for output and template/tool framing: an 8,192-token output budget leaves at most 223,808 tokens of rendered input within a 232,000-token total context.
+
+This was one replay, not a soak test or a qualification of two independent 232K conversations, long reasoning outputs at the boundary, or multimodal expansion. Most warm turns added roughly 68–69 prompt tokens; the near-limit turn added 477. Their timings are not directly comparable to the larger appended chunks in the earlier 150K–180K campaign. Memory sampling began 77.3 seconds into cold prefill and covered all subsequent warm/pressure phases; the stated peak excludes startup and that initial interval.
+
+The test used **thinking disabled** and preceded the reasoning-effort alias revert. It does not establish that this model supports `high`; the current deployment uses the embedded template and rejects that value. See the [evidence index](docs/validation/2026-11-05/context232/README.txt), [summary](docs/validation/2026-11-05/context232/summary.json), and [request measurements](docs/validation/2026-11-05/context232/requests.csv).
 
 ## Lineage and maintenance
 

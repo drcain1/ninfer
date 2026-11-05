@@ -1,0 +1,26 @@
+{
+  "max_context": 232000,
+  "cold_words": 229600,
+  "host_cache_bytes": 9221505024,
+  "spec": "mtp",
+  "draft_tokens": 4,
+  "concurrency": 2,
+  "prefill_chunk": 2048,
+  "kv_dtype": "int8",
+  "thinking": false,
+  "image": "localhost/ninfer-v100:upstream-f4e186aa",
+  "template_sha256": "a8114f013b1a84810305b35882c55cf38d7c2c806996552c6c071cbd1ef99e07",
+  "production_file_hashes": {
+    "/home/dr_cain/projects/ninfer/ninfer.container": "0ef42011765ebc8a9cdb9acd8edb8f21083562e5c1c1855be8cfe06a9b79e32a",
+    "/home/dr_cain/projects/ninfer/entrypoint-volta.sh": "1b771bdd1fa6b23cd85fe43e2b0b44c73acae7846b7fccd7de3c1d4e2db6d1c1",
+    "/home/dr_cain/.config/containers/systemd/ninfer.container": "0ef42011765ebc8a9cdb9acd8edb8f21083562e5c1c1855be8cfe06a9b79e32a"
+  },
+  "guards": {
+    "warm_max_ttft_s": 120,
+    "cold_timeout_s": 1200,
+    "host_available_min_kib": 1048576,
+    "consecutive_low_samples": 3,
+    "server_swap_max_kib": 65536
+  },
+  "scope": "Single growing ~230K to ~232K tool conversation; 12 two-competitor cache-pressure rounds, forced-prefix edits, approvals, recovery, and concurrent short/long work. Not two independent 232K contexts."
+}

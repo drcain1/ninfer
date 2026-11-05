@@ -1,0 +1,94 @@
+NInfer Volta 232,000-token context qualification — 2026-11-05
+
+Recommendation
+The tested 232K configuration is usable for one long conversation interleaved
+with smaller requests, with the existing 8.59 GiB host-cache budget. It did not
+reproduce the old multi-minute warm-prefill stalls. Keep 200K as the default when
+predictable latency matters more than the extra context; 232K is a reasonable
+option when needed, accepting the cold-prefill and concurrency costs below.
+Production was restored at 200000 tokens with its files unchanged. A real
+reasoning_effort=high arithmetic request passed after restoration.
+
+Build and conditions
+Image: localhost/ninfer-v100:upstream-f4e186aa
+Image ID: 8f308d63e52b823a749e814343a9a32a0e307e4f3d4a89bc62783b06c8e034dc
+Inference code: f4e186aa9365357e69ef26f052aef6d5cf6b4674
+Qwen3.8 reasoning-compatible template SHA256:
+a8114f013b1a84810305b35882c55cf38d7c2c806996552c6c071cbd1ef99e07
+Tesla V100 PCIe 32 GB; approximately 31 GiB host RAM; 170 W power limit;
+normal dynamic GPU clocks. Swift Qwen3.8 27B OrcaRouter NVFP4, losslessly packed.
+MTP4 optimized proposal head, INT8 KV, CUDA graphs, prefill chunk 2048,
+concurrency 2, host cache 9221505024 bytes, vision enabled, prefix reuse enabled.
+The test used an isolated port 8081 with production paused. Only max context
+was raised to 232000; model, kernels, template, and host cache matched production.
+
+Workload and outcomes
+53 requests completed, including 24 long warm requests. The synthetic tool
+conversation started at 229922 tokens and grew to 231892 tokens, reserving space
+for generation below the 232000-token total limit. It included two warm turns,
+two forced-prefix-edit turns, two short approvals, 12 rounds of two independent
+roughly 4.4K-token competitors, three recovery turns, a near-limit continuation,
+a concurrent 16.3K-token request, and a final exact repeat.
+The corpus and tool histories are synthetic; this was not an actual Hermes session.
+Thinking was disabled for this latency/cache campaign, as in the prior replay.
+
+Metric                                             Result
+Cold prompt / computed tokens                      229922 / 229830
+Cold time to first output                          700.861 s (11m 41s)
+Sequential warm requests                           23
+Sequential warm median time to first output         1.752 s
+Sequential warm worst time to first output          8.311 s
+Near-limit 231839-token request                     6.373 s
+231892-token continuation alongside 16K request      24.845 s
+Concurrent 16297-token request                      25.450 s
+Final exact repeat at 231892 tokens                 7.152 s
+Maximum observed output-stream gap                  0.237 s
+Long warm requests with zero prefix reuse           0
+Largest long-warm recomputation                     679 tokens
+Maximum checkpoint lag                             679 tokens
+Peak server RSS during monitored inference          9.727 GiB
+Minimum host available memory                      3.193 GiB
+Peak server process swap                           0 KiB
+System-wide swapout increase                        161 pages (644 KiB)
+System-wide swapin increase                         1672 pages (6.53 MiB)
+Peak device-context occupancy                       9970366464 bytes (9.29 GiB)
+Peak host-context occupancy                         9072781312 bytes (8.45 GiB)
+Configured host-context capacity                    9221505024 bytes (8.59 GiB)
+
+Interpretation
+Cold prefill was computationally expensive and continued to make progress; the
+initial roughly 12-minute wait is still real. Prefix caching avoided repeating
+that full cost on subsequent turns. Near capacity, checkpoints sometimes stopped
+advancing temporarily, requiring up to 679 tokens of replay. The exact repeat
+still replayed that suffix and took about seven seconds. Cache retention therefore
+worked, but it was not free of extra work or latency variation.
+The host context pool approached its capacity. The overlapping 16K prefill raised
+the long request's first-output delay to about 25 seconds. No CUDA allocation
+failure, HTTP rejection, service crash, or multi-minute warm stall was observed.
+System-wide swap activity includes unrelated processes; the server itself did not
+swap. The spare 3.19 GiB is measured host headroom, not a general memory guarantee.
+
+Limits
+This is one replay, not a soak or a general concurrency/quality qualification.
+Most warm turns appended 16 corpus words plus tool framing (roughly 68–69 prompt
+tokens); the near-limit turn added 477 prompt tokens. Its median latency must not
+be compared directly with the previous 150K–180K replay's larger appended chunks.
+We did not test two independent 232K conversations, long high-effort reasoning
+outputs at this boundary, arbitrary large tool outputs, or multimodal expansion.
+Reserve output space: e.g. an 8192-token output budget leaves at most 223808 tokens
+for the fully rendered input within a 232000 total context. Template and tool
+framing count too. The nominal ceiling is 232000 tokens, not 232 * 1024.
+Memory telemetry began 77.3 seconds into cold prefill because this kernel lacks
+/proc/pressure/memory. A separate monitor then sampled the remaining cold phase
+and all warm/pressure/concurrent phases. Startup/initial memory peaks are not
+qualified by these measurements. The optional PSI metric was unavailable.
+
+Evidence
+summary.json and requests.csv: measured request and memory summaries.
+protocol.json, launch.json, runtime.json: exact test configuration and image.
+ninfer-client.jsonl, parallel-client.jsonl, server-requests.jsonl, server.log:
+per-request timings, cache accounting, and server events.
+telemetry.jsonl: sampled process/system memory, GPU state, and context metrics.
+production-restored.json and restored-high-smoke.json: restoration validation.
+harness/: retained test scripts; run.py contains the corrected optional-PSI read
+for future reruns; monitor.py was the separate monitor used during this run.
