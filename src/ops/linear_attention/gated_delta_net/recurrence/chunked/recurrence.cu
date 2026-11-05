@@ -1,7 +1,7 @@
 #include "ops/common/host/launch.h"
 #include "core/platform.h"
 #if NINFER_TARGET_V100
-#    include "ops/linear_attention/gated_delta_net/recurrence/v100/contraction.cuh"
+#    include "ops/common/cuda/volta_contraction.cuh"
 #endif
 #include "ops/linear_attention/gated_delta_net/recurrence/chunked/launch.h"
 #include "ops/common/numeric/convert.cuh"
@@ -12,7 +12,7 @@
 namespace ninfer::ops::detail::gated_delta_net::chunked {
 namespace {
 #if NINFER_TARGET_V100
-namespace contraction = v100;
+namespace contraction = common::volta::unrolled;
 #else
 namespace contraction = common;
 #endif

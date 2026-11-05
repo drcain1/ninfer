@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/platform.h"
 #include "ops/common/cuda/pipeline.cuh"
 #include "ops/common/numeric/math.cuh"
 #include "ops/common/cuda/reduce.cuh"
@@ -7,12 +8,21 @@
 // BF16 control dots, optional input norm, and the complete control epilogue.
 #include "ops/common/cuda/memory.cuh"
 #include "ops/common/cuda/mma.cuh"
+#if NINFER_TARGET_V100
+#    include "ops/common/cuda/volta_contraction.cuh"
+#endif
 #include "ops/linear/kernels/rowsplit/rowsplit_mma.cuh"
 #include <cuda_bf16.h>
 #include <cooperative_groups.h>
 #include <cstdint>
 
 namespace ninfer::ops::detail::gdn_control {
+
+#if NINFER_TARGET_V100
+namespace contraction = common::volta::unrolled;
+#else
+namespace contraction = common;
+#endif
 
 inline constexpr int kBlockM     = 16;
 inline constexpr int kBlockK     = 64;
@@ -229,11 +239,11 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
                 }
 #pragma unroll
                 for (int ni = 0; ni < kNFragments; ++ni) {
-                    common::mma_bf16(a_acc[mi][ni][0], a_acc[mi][ni][1], a_acc[mi][ni][2],
+                    contraction::mma_bf16(a_acc[mi][ni][0], a_acc[mi][ni][1], a_acc[mi][ni][2],
                                      a_acc[mi][ni][3], af[0], af[1], af[2], af[3], xf[ni][0],
                                      xf[ni][1]);
                     if constexpr (Paired) {
-                        common::mma_bf16(b_acc[mi][ni][0], b_acc[mi][ni][1], b_acc[mi][ni][2],
+                        contraction::mma_bf16(b_acc[mi][ni][0], b_acc[mi][ni][1], b_acc[mi][ni][2],
                                          b_acc[mi][ni][3], bf[0], bf[1], bf[2], bf[3], xf[ni][0],
                                          xf[ni][1]);
                     }

@@ -1,10 +1,10 @@
 #pragma once
 #include "ops/common/cuda/volta_mma.cuh"
 
-namespace ninfer::ops::detail::gated_delta_net::v100 {
-// GDN repeatedly contracts tiny fixed K8/K16 tiles. Unrolling removes loop and
+namespace ninfer::ops::common::volta::unrolled {
+// Fixed K8/K16 contractions. Unrolling removes loop and
 // operand-selection overhead while preserving represented inputs, FP32 FMAs,
-// and their accumulation order. No FP16 conversion of the recurrent state.
+// and their accumulation order. No FP16 conversion of the operands.
 template <common::volta::Format Format, int Bits>
 __device__ __forceinline__ void contract(float& c0, float& c1, float& c2, float& c3, unsigned a0,
                                          unsigned a1, unsigned a2, unsigned a3, unsigned b0,
@@ -44,4 +44,4 @@ __device__ __forceinline__ void mma_tf32_bits(float& c0, float& c1, float& c2, f
                                               unsigned b0, unsigned b1) {
     contract<common::volta::Format::F32, 32>(c0, c1, c2, c3, a0, a1, a2, a3, b0, b1);
 }
-} // namespace ninfer::ops::detail::gated_delta_net::v100
+} // namespace ninfer::ops::common::volta::unrolled

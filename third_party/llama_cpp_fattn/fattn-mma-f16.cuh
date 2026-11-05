@@ -122,11 +122,12 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
 
     // ninfer: upstream has no 256/256 entry here, so it fell through to the Ampere
     // table's nbatch_combine=128. On Volta get_cols_per_warp() is 32 (16 on Turing+),
-    // which makes the combine buffer 66 KB and caps the kernel at 1 block/SM. Every
-    // genuine Volta entry above uses 64; giving 256/256 the same halves shared memory
-    // to 35,072 B and doubles occupancy to 2 blocks/SM, with no change in accuracy.
+    // which makes the combine buffer 66 KB and caps the kernel at 1 block/SM.
+    // The 32-column geometry fits 2 blocks/SM with a 64-half2 combine tile.
+    // The 64-column geometry benefits from combining 32 half2 values per pass;
+    // its Q/K/V storage still limits occupancy. Contraction precision is unchanged.
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2,  32, 128, 128,  64, 1, false);
-    GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2,  32, 128, 128,  64, 1, false);
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2,  32, 128, 128,  32, 1, false);
 
     // TODO tune specifically for Volta
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
