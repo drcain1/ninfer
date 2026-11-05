@@ -18,7 +18,12 @@ namespace contraction = common;
 #endif
 
 template <int DV>
+#if NINFER_TARGET_V100
+// One warp per value tile reuses the prediction/history operands on Volta.
+inline constexpr int kThreads = DV >= 64 ? 256 : 128;
+#else
 inline constexpr int kThreads = DV >= 32 ? 256 : 128;
+#endif
 
 template <int Width>
 __device__ __forceinline__ int value_index(int row, int col) {
