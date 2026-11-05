@@ -17,15 +17,6 @@ metadata, and qualification report. The model is the losslessly packed artifact
 at /home/dr_cain/projects/ninfer/out/models/qwen3.8-27b-volta-v3.ninfer.
 Do not remove these files while this deployment is active.
 
-A subsequent Qwen3.8 template fix accepts public reasoning-effort aliases:
-high/max map to xhigh, minimal to low, and none disables thinking.
-reasoning-effort-fix.json records the template revision, hash and checks.
-The Quadlet mounts /home/dr_cain/projects/ninfer/deployments/reasoning-effort-20261105/qwen3_8.jinja
-and selects it with --chat-template. It is a copy of tools/chat_templates/qwen3_8.jinja.
-The model artifact embeds the older template; retain this override across restarts.
-No model weights or GPU binaries changed. Post-fix checks passed all 12 compatibility
-cases (including high with streamed tools) and all 16 API regression cases.
-
 The deployment preserves port 8080, alias qwen3.8-27b, max context 200000,
 concurrency 2, INT8 KV, prefill chunk 2048, MTP4, CUDA graphs, and vision. The new
 engine uses the qualified 9221505024-byte host cache and optimized proposal head.

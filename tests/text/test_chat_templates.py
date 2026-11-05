@@ -313,31 +313,6 @@ class ChatTemplates(unittest.TestCase):
                     self.assertTrue(got["ok"], got.get("error"))
                     self.assertEqual(got["text"], expected)
 
-    def test_qwen3_8_public_effort_aliases_with_tools(self):
-        history = [message("system", "Use tools when needed."), message("user", "question")]
-        tools = [
-            {
-                "type": "function",
-                "function": {"name": "inspect", "parameters": {"type": "object"}},
-            }
-        ]
-        for alias, native in (("high", "xhigh"), ("max", "xhigh"), ("minimal", "low")):
-            for tool_list in ([], tools):
-                with self.subTest(alias=alias, tools=bool(tool_list)):
-                    options = dict(tools=tool_list, add_generation_prompt=True)
-                    self.assertEqual(
-                        self.render("qwen3_8", history, reasoning_effort=alias, **options),
-                        self.render("qwen3_8", history, reasoning_effort=native, **options),
-                    )
-        self.assertEqual(
-            self.render("qwen3_8", history, reasoning_effort="none", add_generation_prompt=True),
-            self.render("qwen3_8", history, enable_thinking=False, add_generation_prompt=True),
-        )
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            self.render("qwen3_8", history, reasoning_effort="none", enable_thinking=True)
-        with self.assertRaisesRegex(ValueError, "Unexpected reasoning effort"):
-            self.render("qwen3_8", history, reasoning_effort="unsupported")
-
     def test_flash_next_effort_aliases_and_defaults(self):
         version = "qwen3_8_flash_next"
         history = [message("user", "question")]

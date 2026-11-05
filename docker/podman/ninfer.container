@@ -22,7 +22,6 @@ Volume=/home/dr_cain/projects/ninfer/out/models/qwen3.8-27b-volta-v3.ninfer:/mod
 # Use the full upstream engine launcher and qualified cache profile.
 Volume=/home/dr_cain/projects/ninfer/entrypoint-volta.sh:/opt/ninfer/entrypoint.sh:ro
 Volume=/home/dr_cain/projects/ninfer/logs:/logs:rw
-Volume=/home/dr_cain/projects/ninfer/deployments/reasoning-effort-20261105/qwen3_8.jinja:/opt/ninfer/templates/qwen3_8.jinja:ro
 Volume=/lib64/libcuda.so.1:/usr/local/nvidia/lib64/libcuda.so.1:ro
 Volume=/lib64/libnvidia-ptxjitcompiler.so.1:/usr/local/nvidia/lib64/libnvidia-ptxjitcompiler.so.1:ro
 Volume=/lib64/libnvidia-nvvm.so.4:/usr/local/nvidia/lib64/libnvidia-nvvm.so.4:ro
@@ -31,7 +30,6 @@ Environment=PORT=8080
 Environment=LD_LIBRARY_PATH=/opt/ninfer/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
 Environment=MAX_CONTEXT=200000
 Environment=MODEL_ID=qwen3.8-27b
-Environment=CHAT_TEMPLATE=/opt/ninfer/templates/qwen3_8.jinja
 Environment=MODEL_PATH=/models/qwen3.8-27b-volta-v3.ninfer
 Environment=API_KEY=
 Environment=MAX_CONCURRENCY=2
