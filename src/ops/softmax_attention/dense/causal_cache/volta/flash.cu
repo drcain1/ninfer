@@ -10,7 +10,6 @@
 namespace ninfer::ops::detail {
 namespace {
 constexpr int kDKQ = 256;
-constexpr int kDV  = 256;
 
 // The kernel picks ncols2 from the GQA ratio, and this table mirrors that choice
 // per registered geometry:
@@ -38,6 +37,9 @@ struct VoltaFlashTiling<CausalD256H16Kv2> {
 
 template <typename Geometry>
 struct VoltaFlashParams {
+    // Keep the FP32 value accumulator small enough to avoid register spills.
+    // The 24-head geometry computes two independent value slices per query tile.
+    static constexpr int kDV      = Geometry::QHeads == 24 ? 128 : 256;
     static constexpr int kQHeads  = Geometry::QHeads;
     static constexpr int kKVHeads = Geometry::KVHeads;
     static constexpr int kGroup   = Geometry::GroupSize;
@@ -145,13 +147,18 @@ __global__ void prepare_mask(CausalAttentionOperands p, const int* valid_columns
         mask[std::int64_t(row) * padded + key] = __float2half(key <= last ? 0.f : -INFINITY);
 }
 
+template <int ValueWidth>
 __global__ void finish(CausalAttentionOperands p, const int* valid_columns, const float* in,
                        int begin, int tokens) {
     const auto i = std::int64_t(blockIdx.x) * 256 + threadIdx.x;
     if (i >= std::int64_t(tokens) * p.query_heads * 256) return;
     const int valid = valid_columns ? valid_columns[0] : p.width;
+    const auto row = i / 256;
+    const int d = i % 256;
+    const auto source = row * ValueWidth + d % ValueWidth +
+                        std::int64_t(d / ValueWidth) * tokens * p.query_heads * ValueWidth;
     p.out[std::int64_t(begin) * p.query_heads * 256 + i] =
-        __float2bfloat16(begin + i / (p.query_heads * 256) < valid ? in[i] : 0.f);
+        __float2bfloat16(begin + i / (p.query_heads * 256) < valid ? in[source] : 0.f);
 }
 
 // The tensor-core path stages FP16 operands. Rare rows outside that range use
@@ -230,6 +237,7 @@ struct FlashLaunchConfig {
 template <typename Geometry>
 const FlashLaunchConfig& flash_launch_config() {
     using P = VoltaFlashParams<Geometry>;
+    constexpr int kDV = P::kDV;
 
     static const FlashLaunchConfig config = [] {
         FlashLaunchConfig c;
@@ -286,6 +294,7 @@ void launch_flash_block(const float* q_f32, const half* k_f16, const half* v_f16
                         float* dst, float2* dst_meta, const int* key_limits, int tokens, int n_kv,
                         int mask_stride, float scale, cudaStream_t stream) {
     using P                = VoltaFlashParams<Geometry>;
+    constexpr int kDV      = P::kDV;
     constexpr int kQHeads  = P::kQHeads;
     constexpr int kKVHeads = P::kKVHeads;
     constexpr int kGroup   = P::kGroup;
@@ -359,6 +368,7 @@ void launch_flash_block(const float* q_f32, const half* k_f16, const half* v_f16
 template <class G>
 void execute(const CausalAttentionOperands& p, Int8KvReadView cache, VoltaFlashScratch s,
              cudaStream_t stream) {
+    constexpr int kDV = VoltaFlashParams<G>::kDV;
     const int padded  = round_up_keys(p.visible_capacity);
     auto* exceptional = static_cast<int*>(s.exceptional.data);
     CUDA_CHECK(cudaMemsetAsync(exceptional, 0, sizeof(int), stream));
@@ -378,12 +388,15 @@ void execute(const CausalAttentionOperands& p, Int8KvReadView cache, VoltaFlashS
             static_cast<int*>(s.key_limits.data), VoltaFlashParams<G>::kNcols1,
             flash_launch_config<G>().nbatch_fa);
         CUDA_CHECK(cudaMemsetAsync(s.output.data, 0, count * sizeof(float), stream));
-        launch_flash_block<G>(static_cast<float*>(s.query.data), static_cast<half*>(s.key.data),
-                              static_cast<half*>(s.value.data), static_cast<half*>(s.mask.data),
-                              static_cast<float*>(s.output.data), static_cast<float2*>(s.meta.data),
-                              static_cast<int*>(s.key_limits.data), tokens, padded, padded, p.scale,
-                              stream);
-        finish<<<(count + 255) / 256, 256, 0, stream>>>(
+        for (int part = 0; part < 256 / kDV; ++part) {
+            launch_flash_block<G>(
+                static_cast<float*>(s.query.data), static_cast<half*>(s.key.data),
+                static_cast<half*>(s.value.data) + part * kDV, static_cast<half*>(s.mask.data),
+                static_cast<float*>(s.output.data) + std::int64_t(part) * tokens * p.query_heads * kDV,
+                static_cast<float2*>(s.meta.data), static_cast<int*>(s.key_limits.data),
+                tokens, padded, padded, p.scale, stream);
+        }
+        finish<kDV><<<(count + 255) / 256, 256, 0, stream>>>(
             p, cache.valid_columns, static_cast<float*>(s.output.data), begin, tokens);
         range_fallback<G::KVHeads>
             <<<dim3(tokens, p.query_heads), 256, 0, stream>>>(p, cache, exceptional, begin, tokens);

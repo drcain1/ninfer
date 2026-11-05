@@ -4,6 +4,11 @@ ninfer_internal_includes(ninfer_ops)
 ninfer_cuda_library(ninfer_ops)
 target_link_libraries(ninfer_ops PUBLIC ninfer_core)
 if(NINFER_TARGET STREQUAL "v100")
+  # Each Op translation unit owns its device code. Keep separate CUDA modules
+  # so preparing the model does not retain one large device-linked image in RAM.
+  set_target_properties(ninfer_ops PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF)
   # Some public Ops are self-contained non-RDC units. Retain their entry points
   # even when no other object inside this shared library calls them.
   target_link_libraries(ninfer_ops PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,ninfer_ops_non_rdc>")
