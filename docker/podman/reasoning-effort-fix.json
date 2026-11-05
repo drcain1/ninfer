@@ -1,0 +1,72 @@
+{
+  "deployed_utc": "2026-11-05T06:11:10.020933+00:00",
+  "source_commit": "c8d08815a0e2bf7a00897ad16e35dc67fc353fc6",
+  "inference_commit": "f4e186aa9365357e69ef26f052aef6d5cf6b4674",
+  "image": "localhost/ninfer-v100:upstream-f4e186aa",
+  "chat_template": "/home/dr_cain/projects/ninfer/deployments/reasoning-effort-20261105/qwen3_8.jinja",
+  "template_sha256": "a8114f013b1a84810305b35882c55cf38d7c2c806996552c6c071cbd1ef99e07",
+  "mapping": {
+    "high": "xhigh",
+    "max": "xhigh",
+    "minimal": "low",
+    "none": "thinking disabled"
+  },
+  "validation": {
+    "template_tests_passed": 10,
+    "unchanged_native_prompt_cases": 16,
+    "compatibility_checks": [
+      {
+        "name": "chat_high_arithmetic",
+        "passed": true
+      },
+      {
+        "name": "chat_high_stream_with_template_kwargs",
+        "passed": true
+      },
+      {
+        "name": "chat_xhigh",
+        "passed": true
+      },
+      {
+        "name": "chat_max",
+        "passed": true
+      },
+      {
+        "name": "chat_minimal",
+        "passed": true
+      },
+      {
+        "name": "chat_low",
+        "passed": true
+      },
+      {
+        "name": "chat_medium",
+        "passed": true
+      },
+      {
+        "name": "chat_none",
+        "passed": true
+      },
+      {
+        "name": "hermes_shape_high_streamed_tool_call",
+        "passed": true
+      },
+      {
+        "name": "responses_high",
+        "passed": true
+      },
+      {
+        "name": "unknown_effort_rejected",
+        "passed": true
+      },
+      {
+        "name": "conflicting_thinking_rejected",
+        "passed": true
+      }
+    ],
+    "api_regression_passed": 16,
+    "api_regression_total": 16
+  },
+  "previous_configuration": "/home/dr_cain/projects/ninfer/deployments/reasoning-effort-20261105/ninfer.container.previous",
+  "previous_launcher": "/home/dr_cain/projects/ninfer/deployments/reasoning-effort-20261105/entrypoint-volta.previous.sh"
+}

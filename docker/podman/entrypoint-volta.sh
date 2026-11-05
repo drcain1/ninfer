@@ -16,6 +16,7 @@ args=(
     --preserve-thinking --pending-timeout "${PENDING_TIMEOUT:-600s}"
     --gpu-timing --log-level "${LOG_LEVEL:-info}"
 )
+if [[ -n "${CHAT_TEMPLATE:-}" ]]; then args+=(--chat-template "$CHAT_TEMPLATE"); fi
 if [[ "${VISION:-1}" == 1 ]]; then args+=(--vision); fi
 if [[ -n "${REQUEST_LOG_JSONL:-}" ]]; then args+=(--request-log-jsonl "$REQUEST_LOG_JSONL"); fi
 if [[ -n "${API_KEY:-}" ]]; then args+=(--api-key "$API_KEY"); fi
