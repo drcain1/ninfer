@@ -13,7 +13,7 @@ Both tracks live in **[drcain1/ninfer-volta](https://github.com/drcain1/ninfer-v
 | [`port/upstream-v100-20261103`](https://github.com/drcain1/ninfer-volta/tree/port/upstream-v100-20261103) — this branch | Full upstream engine with native Volta support and performance work | Inference commit `f4e186aa`, based on upstream `a754fcf3` |
 | [`backport/upstream-reliability-20261103`](https://github.com/drcain1/ninfer-volta/tree/backport/upstream-reliability-20261103) | Older working V100 engine with selected upstream reliability fixes | Inference commit `bc3f1be2` |
 
-These are separate engine generations with different configuration flags. The revisions above identify the tested inference code; later documentation commits do not change those binaries. As of the November 5, 2026 qualification, the full port is packaged and validated, while the reliability build remains deployed on the reference host.
+These are separate engine generations with different configuration flags. The revisions above identify the tested inference code; later documentation commits do not change those binaries. After qualification on November 5, 2026, the full port replaced the reliability build on the reference host. The [deployment snapshot](docker/podman/README.txt) records its configuration and successful post-switch checks; the reliability image is retained for rollback.
 
 ## What the port does
 

@@ -1,0 +1,53 @@
+[Unit]
+Description=NInfer Volta full upstream inference server (f4e186aa)
+StartLimitIntervalSec=0
+RequiresMountsFor=/mnt/models/ninfer
+Conflicts=infernix.service
+After=infernix.service
+
+[Container]
+Image=localhost/ninfer-v100:upstream-f4e186aa
+Pull=never
+ContainerName=ninfer-v100
+Entrypoint=/bin/bash
+Exec=-c "exec /opt/ninfer/entrypoint.sh 2>&1"
+PublishPort=8080:8080
+AddDevice=/dev/nvidia0
+AddDevice=/dev/nvidiactl
+AddDevice=/dev/nvidia-uvm
+SecurityLabelDisable=true
+SeccompProfile=/home/dr_cain/projects/ninfer/out/upstream-v100-f4e186aa/seccomp-uring.json
+Ulimit=memlock=-1:-1
+Volume=/home/dr_cain/projects/ninfer/out/models/qwen3.8-27b-volta-v3.ninfer:/models/qwen3.8-27b-volta-v3.ninfer:ro
+# Use the full upstream engine launcher and qualified cache profile.
+Volume=/home/dr_cain/projects/ninfer/entrypoint-volta.sh:/opt/ninfer/entrypoint.sh:ro
+Volume=/home/dr_cain/projects/ninfer/logs:/logs:rw
+Volume=/lib64/libcuda.so.1:/usr/local/nvidia/lib64/libcuda.so.1:ro
+Volume=/lib64/libnvidia-ptxjitcompiler.so.1:/usr/local/nvidia/lib64/libnvidia-ptxjitcompiler.so.1:ro
+Volume=/lib64/libnvidia-nvvm.so.4:/usr/local/nvidia/lib64/libnvidia-nvvm.so.4:ro
+Volume=/lib64/libnvidia-ml.so.1:/usr/local/nvidia/lib64/libnvidia-ml.so.1:ro
+Environment=PORT=8080
+Environment=LD_LIBRARY_PATH=/opt/ninfer/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+Environment=MAX_CONTEXT=200000
+Environment=MODEL_ID=qwen3.8-27b
+Environment=MODEL_PATH=/models/qwen3.8-27b-volta-v3.ninfer
+Environment=API_KEY=
+Environment=MAX_CONCURRENCY=2
+Environment=KV_DTYPE=int8
+Environment=PREFILL_CHUNK=2048
+Environment=HOST_CACHE_CAPACITY=9221505024B
+Environment=PENDING_TIMEOUT=600s
+Environment=REQUEST_LOG_JSONL=/logs/requests-upstream-f4e186aa.jsonl
+Environment=DRAFT_TOKENS=4
+Environment=VISION=1
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=300
+TimeoutStopSec=60
+ExecStartPre=/usr/bin/test -c /dev/nvidia0
+ExecStartPre=/usr/bin/test -c /dev/nvidia-uvm
+
+[Install]
+WantedBy=default.target

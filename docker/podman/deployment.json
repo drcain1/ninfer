@@ -1,0 +1,47 @@
+{
+  "deployed_utc": "2026-11-05T05:53:20.760964+00:00",
+  "inference_commit": "f4e186aa9365357e69ef26f052aef6d5cf6b4674",
+  "repository": "https://github.com/drcain1/ninfer-volta",
+  "branch": "port/upstream-v100-20261103",
+  "image": "localhost/ninfer-v100:upstream-f4e186aa",
+  "image_id": "8f308d63e52b823a749e814343a9a32a0e307e4f3d4a89bc62783b06c8e034dc",
+  "service": "ninfer.service",
+  "container": "ninfer-v100",
+  "port": 8080,
+  "model_id": "qwen3.8-27b",
+  "model": "/home/dr_cain/projects/ninfer/out/models/qwen3.8-27b-volta-v3.ninfer",
+  "configuration": {
+    "max_context": 200000,
+    "prefill_chunk": 2048,
+    "max_concurrency": 2,
+    "kv_dtype": "int8",
+    "host_cache_bytes": 9221505024,
+    "spec": "mtp",
+    "draft_tokens": 4,
+    "proposal_head": "optimized",
+    "cuda_graph": true,
+    "vision": true,
+    "pending_timeout_seconds": 600
+  },
+  "validation": {
+    "healthy": true,
+    "api_checks_passed": 16,
+    "api_checks_total": 16,
+    "concurrent_arithmetic_passed": 8,
+    "concurrent_arithmetic_total": 8,
+    "binary_sha256": "f37b986e5ee7e4147e581d8ce724c6e54e49ecb206b01105ae769a5d844eecdb",
+    "ops_sha256": "d140b16470c78ad1bb085529f27a41ec7e73e8e98332dfcb1352ab2c2be13a2f",
+    "binary_and_ops_hashes_verified": true,
+    "process_memory_after_checks": {
+      "VmRSS": "10133496 kB",
+      "VmSwap": "0 kB"
+    },
+    "service_restarts": 0
+  },
+  "rollback": {
+    "image": "localhost/ninfer-v100:sm70-bc3f1be2",
+    "script": "/home/dr_cain/projects/ninfer/deployments/upstream-f4e186aa-20261105/rollback.sh",
+    "previous_quadlet": "/home/dr_cain/projects/ninfer/deployments/upstream-f4e186aa-20261105/ninfer.container.previous"
+  },
+  "request_log": "/home/dr_cain/projects/ninfer/logs/requests-upstream-f4e186aa.jsonl"
+}
