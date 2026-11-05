@@ -245,6 +245,30 @@ void add_quantized_causal_cases(OpSuite& suite, KvCacheStorage storage) {
                                 {width, 17, 2048, static_cast<unsigned>(9400 + width), false, true},
                                 MappingPattern::Fragmented, edge_queries);
             }
+            if (geometry.q_heads == 24) {
+                // Native prefill boundary, masked tails, and large-range fallback.
+                for (int width : {511, 512, 513}) {
+                    const std::array<int, 3> queries{0, width / 2, width - 1};
+                    add_append_case(suite, geometry, storage,
+                                    {width, 17, 2048, static_cast<unsigned>(1500 + width), false, true},
+                                    MappingPattern::Fragmented, queries);
+                }
+                const std::array<int, 3> range_queries{0, 256, 512};
+                add_cached_case(suite, geometry, storage,
+                                {513, 0, 1024, 1501u, false, true, 131072.f},
+                                MappingPattern::Fragmented, range_queries);
+                add_append_case(suite, geometry, storage,
+                                {513, 0, 1024, 1502u, true, true, .25f, 262144.f},
+                                MappingPattern::Offset, range_queries);
+                add_cached_case(suite, geometry, storage,
+                                {513, 0, 1024, 1503u, false, true, .25f, 1.f, 0x1p100f},
+                                MappingPattern::Fragmented, range_queries);
+                // Qualify online accumulation over the actual long-context history.
+                const std::array<int, 4> long_queries{0, 511, 1023, 2047};
+                add_cached_case(suite, geometry, storage,
+                                {2048, 150000, 180000, 1504u, false, true, 1.8f * std::sqrt(3.f)},
+                                MappingPattern::Fragmented, long_queries);
+            }
             const std::array<int, 7> unordered_queries{0, 31, 32, 255, 256, 511, 512};
             add_cached_case(suite, geometry, storage,
                             {513, 0, 8192, 9357u, false, true, .25f, 1.f, 1.f, true},

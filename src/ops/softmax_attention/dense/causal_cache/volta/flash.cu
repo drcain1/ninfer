@@ -1,6 +1,7 @@
 // Adapted from Infernix and geoffwatts/ninfer-v100; see third_party/volta/NOTICE.
 #include "fattn-mma-f16.cuh"
 #include "ops/softmax_attention/dense/causal_cache/volta/flash.h"
+#include "ops/softmax_attention/dense/causal_cache/volta/prefill.cuh"
 #include "ops/kv_cache/kernels/layout.cuh"
 #include "ops/kv_cache/kernels/hadamard.cuh"
 #include "core/device.h"
@@ -377,6 +378,21 @@ void execute(const CausalAttentionOperands& p, Int8KvReadView cache, VoltaFlashS
     gather<G::KVHeads><<<dim3(padded, G::KVHeads), 256, 0, stream>>>(
         cache, p, static_cast<half*>(s.key.data), static_cast<half*>(s.value.data), exceptional,
         static_cast<const int*>(s.key_limits.data));
+    if constexpr (G::QHeads == 24) {
+        // Large batches amortize one full-width Volta pass. Small batches keep
+        // the stream-K implementation so they can split work across more SMs.
+        if (p.width >= 512) {
+            volta_prefill::launch(p, static_cast<half*>(s.key.data), static_cast<half*>(s.value.data),
+                                 cache.valid_columns, exceptional, stream);
+            for (int begin = 0; begin < p.width; begin += kVoltaFlashQBlockTokens) {
+                const int tokens = std::min(kVoltaFlashQBlockTokens, p.width - begin);
+                range_fallback<G::KVHeads><<<dim3(tokens, p.query_heads), 256, 0, stream>>>(
+                    p, cache, exceptional, begin, tokens);
+            }
+            CUDA_CHECK(cudaGetLastError());
+            return;
+        }
+    }
     for (int begin = 0; begin < p.width; begin += kVoltaFlashQBlockTokens) {
         const int tokens = std::min(kVoltaFlashQBlockTokens, p.width - begin);
         const int rows   = (tokens + 63) / 64 * 64;

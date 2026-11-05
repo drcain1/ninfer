@@ -6,3 +6,8 @@ llama.cpp, Copyright (c) 2023-2024 The ggml authors, MIT License (LICENSE.llama)
 Flash attention and lossless artifact-packing adaptations imported from local
 Infernix revision
 501f2a9ac788cff96d6f34c9e5ab68c349398576, including FP32 PV accumulation.
+
+Native full-width Volta prefill MMA fragment math adapted from local ninfer-all
+revision d0c28d90 (Apache License 2.0), specifically
+src/ops/softmax_attention/dense/causal_cache/small_t_sm70.cuh and prompt_sm70.cu.
+The full-batch gathered-INT8 adapter and scheduling are maintained in this fork.
