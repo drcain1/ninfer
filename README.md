@@ -13,7 +13,7 @@ We kept two tracks in **[drcain1/ninfer-volta](https://github.com/drcain1/ninfer
 | [`backport/upstream-reliability-20261103`](https://github.com/drcain1/ninfer-volta/tree/backport/upstream-reliability-20261103) — this branch | Keep the working V100 engine and backport selected reliability improvements | `bc3f1be2` |
 | [`port/upstream-v100-20261103`](https://github.com/drcain1/ninfer-volta/tree/port/upstream-v100-20261103) | Port the newer upstream engine to Volta, including native kernels and performance work | `f4e186aa`, based on upstream `a754fcf3` |
 
-This branch retains the older engine architecture. The full port has its own build presets, artifact requirements, and runtime flags. As of November 5, 2026, this reliability build remains deployed on the reference host and the full port has completed its qualification campaign. Documentation commits after the revisions above do not change the tested binaries.
+This branch retains the older engine architecture. The full port has its own build presets, artifact requirements, and runtime flags. On November 5, 2026, the qualified full port replaced this reliability build on the reference host. This build and its deployment snapshot remain available for rollback. Documentation commits after the revisions above do not change the tested binaries.
 
 ## What changed
 

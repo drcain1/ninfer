@@ -7,7 +7,8 @@ backport/upstream-reliability-20261103. It contains the working V100 engine plus
 selected upstream reliability fixes. The separate port/upstream-v100-20261103
 branch subsequently completed full-engine V100 qualification on 2026-11-05;
 see its README for results and its different configuration requirements.
-This snapshot continues to describe the deployed reliability build.
+The full port replaced reliability on the reference host after qualification.
+This snapshot describes the prior reliability deployment, retained for rollback.
 
 ninfer.container is the deployed user Quadlet. entrypoint.sh maps its environment
 to server options. The model and driver-library paths match the validated host;
