@@ -1,0 +1,28 @@
+{
+  "deployed_utc": "2026-11-05T06:51:40.937995+00:00",
+  "image": "localhost/ninfer-v100:upstream-f4e186aa",
+  "image_id": "8f308d63e52b823a749e814343a9a32a0e307e4f3d4a89bc62783b06c8e034dc",
+  "inference_commit": "f4e186aa9365357e69ef26f052aef6d5cf6b4674",
+  "configuration": {
+    "MAX_CONTEXT": "232000",
+    "MAX_CONCURRENCY": "2",
+    "HOST_CACHE_CAPACITY": "9221505024B",
+    "PREFILL_CHUNK": "2048",
+    "KV_DTYPE": "int8",
+    "DRAFT_TOKENS": "4",
+    "MODEL_ID": "qwen3.8-27b"
+  },
+  "validation": {
+    "healthy": true,
+    "model_context": 232000,
+    "concurrent_xhigh_arithmetic_passed": 2,
+    "context_overflow_rejected": true,
+    "high_rejected": true,
+    "template_override_absent": true
+  },
+  "rollback": "/home/dr_cain/projects/ninfer/deployments/context232-live-20261105/rollback.sh",
+  "hermes_context_length": 200000,
+  "qualification_report": "docs/validation/2026-11-05/context232/REPORT.txt",
+  "scope": "One near-232K conversation plus smaller competing requests; two near-limit conversations are not qualified.",
+  "reasoning_template": "embedded artifact template; high is rejected"
+}

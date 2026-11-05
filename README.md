@@ -29,7 +29,7 @@ The public products remain `.ninfer` model artifacts, a CLI, an OpenAI/Anthropic
 
 The qualified machine is a **Tesla V100 PCIe 32 GB**, Linux x86_64, with approximately **31 GiB host RAM**. Builds used **CUDA 12.8.1 and GCC 13**. The V100 target accepts CUDA 12.8/12.9; CUDA 13 removes `sm_70` compilation support.
 
-End-to-end validation used **Swift 1.5 Qwen3.8 27B OrcaRouter NVFP4**, with a losslessly repacked artifact, **MTP with four draft tokens**, INT8 KV, CUDA graphs, 2,048-token prefill chunks, two execution lanes, and a 200,000-token context limit. `qwen3.8-27b` is the serving alias. Although the source artifact includes DFlash2 weights, the performance results below use MTP.
+The original end-to-end comparison used **Swift 1.5 Qwen3.8 27B OrcaRouter NVFP4**, with a losslessly repacked artifact, **MTP with four draft tokens**, INT8 KV, CUDA graphs, 2,048-token prefill chunks, two execution lanes, and a 200,000-token context limit. `qwen3.8-27b` is the serving alias. Although the source artifact includes DFlash2 weights, the performance results below use MTP.
 
 The broader upstream model implementations remain in the tree. Their presence is not a claim of V100 qualification. V100 16 GB, other Volta cards, and arbitrary model families have not been qualified by this campaign. A separate [232K context test](#232k-context-test) exercised one long conversation with smaller competing requests; contexts beyond 232,000 tokens remain unqualified.
 
@@ -56,12 +56,12 @@ python3 -m tools.artifact.pack_volta model-v3.ninfer model-volta-v3.ninfer
 
 This changes the layout of supported packed weights, not their represented values; it does not quantize a new model. The qualification artifact was checked for exact represented-weight preservation.
 
-The tested compute/cache profile, with an example loopback listener:
+The current deployment profile, exercised by the 232K test below, with an example loopback listener:
 
 ```bash
 ./build/v100-release/apps/ninfer-serve /path/to/model-volta-v3.ninfer \
   --host 127.0.0.1 --port 8080 --model-id qwen3.8-27b \
-  --max-context 200000 --context-capacity auto --kv-dtype int8 \
+  --max-context 232000 --context-capacity auto --kv-dtype int8 \
   --prefill-chunk 2048 --max-concurrency 2 \
   --host-cache-capacity 9221505024B --prefix-reuse \
   --cuda-graph --spec mtp --draft-tokens 4 --proposal-head optimized \
@@ -138,7 +138,7 @@ The synthetic tool conversation included forced prefix edits, short approval req
 
 The host cache approached capacity. Some checkpoints temporarily stopped advancing, requiring up to **679 tokens** of suffix replay, including on the final exact repeat. This avoided full-history reprocessing but still added latency. The cold wait of almost 12 minutes is real; caching only avoids repeating it on subsequent turns. System-wide swapout increased by 161 pages (644 KiB), including unrelated processes, while the server itself did not swap.
 
-**Recommendation:** retain **200K as the default for predictable latency**. A **232K limit is usable for the tested single long conversation with smaller competing requests** when the additional context justifies the cold-prefill cost and occasional tens-of-seconds delay. The test restored production to **200,000 tokens**; it did not permanently raise the limit or host-cache budget. Reserve space for output and template/tool framing: an 8,192-token output budget leaves at most 223,808 tokens of rendered input within a 232,000-token total context.
+**Deployment choice:** the reference service now uses **232K** for a single long conversation with smaller competing requests, keeping concurrency at 2 and host cache at 8.59 GiB. **200K remains the more conservative choice for predictable latency**. A **232K limit is usable for the tested single long conversation with smaller competing requests** when the additional context justifies the cold-prefill cost and occasional tens-of-seconds delay. The test initially restored production to **200,000 tokens**. A subsequent [service configuration change](docker/podman/context232-deployment.json) raised only the context ceiling to **232,000**; this does not qualify two simultaneous near-limit conversations. Reserve space for output and template/tool framing: an 8,192-token output budget leaves at most 223,808 tokens of rendered input within a 232,000-token total context.
 
 This was one replay, not a soak test or a qualification of two independent 232K conversations, long reasoning outputs at the boundary, or multimodal expansion. Most warm turns added roughly 68–69 prompt tokens; the near-limit turn added 477. Their timings are not directly comparable to the larger appended chunks in the earlier 150K–180K campaign. Memory sampling began 77.3 seconds into cold prefill and covered all subsequent warm/pressure phases; the stated peak excludes startup and that initial interval.
 

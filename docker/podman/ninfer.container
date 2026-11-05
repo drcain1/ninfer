@@ -28,7 +28,7 @@ Volume=/lib64/libnvidia-nvvm.so.4:/usr/local/nvidia/lib64/libnvidia-nvvm.so.4:ro
 Volume=/lib64/libnvidia-ml.so.1:/usr/local/nvidia/lib64/libnvidia-ml.so.1:ro
 Environment=PORT=8080
 Environment=LD_LIBRARY_PATH=/opt/ninfer/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
-Environment=MAX_CONTEXT=200000
+Environment=MAX_CONTEXT=232000
 Environment=MODEL_ID=qwen3.8-27b
 Environment=MODEL_PATH=/models/qwen3.8-27b-volta-v3.ninfer
 Environment=API_KEY=
