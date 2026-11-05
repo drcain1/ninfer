@@ -5,7 +5,9 @@ The image is localhost/ninfer-v100:sm70-bc3f1be2, built from source commit
 bc3f1be27817d4fdb9db8f5c88ffc43555569163 on branch
 backport/upstream-reliability-20261103. It contains the working V100 engine plus
 selected upstream reliability fixes. The separate port/upstream-v100-20261103
-branch is not an inference-ready replacement.
+branch subsequently completed full-engine V100 qualification on 2026-11-05;
+see its README for results and its different configuration requirements.
+This snapshot continues to describe the deployed reliability build.
 
 ninfer.container is the deployed user Quadlet. entrypoint.sh maps its environment
 to server options. The model and driver-library paths match the validated host;
